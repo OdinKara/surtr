@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "Surtr",
+  "version": "0.1.0",
+  "description": "Bulk X post removal. Runs entirely in your browser. Nothing is uploaded.",
+  "permissions": ["storage", "unlimitedStorage", "sidePanel", "downloads"],
+  "host_permissions": ["https://x.com/*"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "content_scripts": [
+    { "matches": ["https://x.com/*"], "js": ["content/executor.js"], "run_at": "document_idle" }
+  ],
+  "action": { "default_title": "Surtr" },
+  "side_panel": { "default_path": "ui/panel.html" },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' https://x.com"
+  },
+  "web_accessible_resources": [
+    { "resources": ["lib/*.js"], "matches": ["https://x.com/*"] }
+  ]
+}

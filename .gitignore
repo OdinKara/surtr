@@ -1,0 +1,23 @@
+# Dependencies / build output. Surtr has NO build step; these exist so that a
+# stray tool run can never sneak generated or packaged artifacts into a repo
+# whose entire security argument is "the shipped code IS the repo code".
+node_modules/
+dist/
+*.zip
+*.crx
+
+# Signing material. A .pem here would be a private key.
+*.pem
+
+# Secrets and local-only config.
+.env
+*.local.json
+
+# Runtime output.
+logs/
+
+# Scan output. These contain YOUR post text, ids and permalinks - personal data
+# by definition. They are written to your Downloads folder by design; this rule
+# exists in case one is ever moved into the tree.
+surtr-report-*.json
+surtr-report-*.csv
