@@ -153,6 +153,20 @@ function renderJob(job) {
     : j.cursor ? 'Resume dry-run scan'
     : 'Start dry-run scan';
 
+  // What the parser refused. A "FOREIGN AUTHOR" count here is the safety gate
+  // rejecting the who-to-follow module - the guard working, not a fault - and
+  // showing it beats dropping those entries silently.
+  const skipped = $('skipped');
+  const rej = j.rejected && Object.keys(j.rejected).length ? j.rejected : null;
+  if (rej) {
+    skipped.textContent = 'skipped: ' +
+      Object.entries(rej).map(([w, n]) => n + ' x ' + w).join(', ') +
+      (j.reportedTotal ? '  |  X reports ' + j.reportedTotal + ' posts on this account' : '');
+    skipped.hidden = false;
+  } else {
+    skipped.hidden = true;
+  }
+
   const term = $('termination');
   if (j.termination) {
     term.textContent = j.termination;

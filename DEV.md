@@ -240,21 +240,72 @@ still sitting in the JavaScript. The panel therefore shows an operation as
 **"confirmed live"** — set by the executor after the first successful page. A
 row that says "discovered" off a bundle hit is lying by omission.
 
-### OPEN: does UserOriginalsTimeline carry retweets?
+### ANSWERED: UserOriginalsTimeline does NOT carry retweets
 
-**Unresolved, and deliberately not guessed at.** Scope is posts + retweets. The
-name suggests originals only, but X's Posts tab visibly renders retweets, so
-the name is not evidence either way. Until it is answered from a real bundle
-dump plus a real response:
+Confirmed from a parsed live response body: `scribeConfig.page` is
+`"profileOriginals"` and `retweeted_status_result` appears **zero times** in
+6,521 lines. Scope is posts + retweets, so a second stream is required.
+`UserRepliesTimeline` is being checked next.
 
-- `lib/enumerate.js` parsing is UNCHANGED on purpose.
-- Whether enumeration has to merge two or three streams is undecided.
+**Multi-stream merging is NOT implemented**, pending confirmation of which
+operation actually carries retweets. Do not build it before that lands.
 
-Answering it needs the logged-in bundle. The logged-out shell now serves an
-`x-web/…/entry-client-*.js` family that contains **no GraphQL operation table
-at all** (verified: `operationName` and `queryId` occur zero times across the
-entry bundle and sampled chunks), and the old `responsive-web/client-web/*`
-paths 404 unauthenticated. So the dump can only come from a logged-in browser.
+Note the trap in the name: **"Originals" means not-retweets, NOT not-replies.**
+UserOriginalsTimeline does return replies - entries carry
+`in_reply_to_screen_name` and a quick_promote_eligibility of `"ReplyTweet"`. So
+kind is classified per entry and never inferred from the operation an entry
+arrived in.
+
+### Confirmed live response shape
+
+Corrections against the phase-1 spec, all measured rather than assumed:
+
+| thing | spec said | live response |
+|---|---|---|
+| instructions root | `timeline_v2.timeline` | **`timeline.timeline`** - no `timeline_v2` at all |
+| instruction order | implicitly positional | `instructions[0]` is `TimelineClearCache`, **no entries** |
+| cursor | `content.entryType` | `content.__typename === 'TimelineTimelineCursor'`, `cursorType: 'Bottom'`, opaque `value`, entryId prefix `cursor-bottom-` |
+| counts | favorite/retweet/reply | all under `legacy`, plus `quote_count` |
+| text / id | full_text / id_str | confirmed; `rest_id` also present and matches |
+| created_at | - | `legacy.created_at`, `"Thu Oct 30 13:34:36 +0000 2025"` |
+| media | - | `legacy.entities.media` / `extended_entities.media` |
+| pinned | `TimelinePinEntry` | did **not** appear; the captured account has no pinned post |
+| total | - | `user.tweet_counts.tweets`, usable as a progress denominator |
+
+The root-key error is worth keeping visible: the predicted symptom of getting
+it wrong was "page one returns zero posts", which is indistinguishable from an
+empty account. It was written into this file as a thing to re-check before any
+live run happened, and it was the first thing the live run disproved.
+
+### SAFETY: the entries array contains other people's tweet ids
+
+`collectEntries()` is a safety boundary, not a convenience. A live response
+carries a `who-to-follow-` module of SUGGESTED ACCOUNTS, and every suggested
+user brings `pinned_items.tweet_ids_str` with it - **other people's tweet ids,
+in the same entries array as yours, shaped identically to yours**. A loose walk
+that collects anything tweet-shaped harvests them, and a future execution phase
+would then try to delete a stranger's post.
+
+An entry is accepted only when all three hold:
+
+1. `entry.content.entryType === 'TimelineTimelineItem'`
+2. `entry.content.itemContent.__typename === 'TimelineTweet'`
+3. `tweet.legacy.user_id_str === expectedUserId` (resolved via
+   `UserByScreenName`, i.e. proven to be us)
+
+Everything else is rejected and counted by entry-id prefix, surfaced in the
+panel and the activity log rather than dropped silently. Modules are not walked
+into at all. `expectedUserId` is mandatory and **fails closed**: without it the
+parser accepts nothing, because a missing id must never come to mean "accept
+everything".
+
+`tests/parser.test.mjs` locks this down against a fixture containing a
+who-to-follow module, a foreign-authored tweet entry, a `TimelineClearCache`
+first instruction and a cursor entry. It asserts that no foreign id reaches the
+output, that the gate fails closed, and that kind classification is per entry.
+Run it with `node tests/parser.test.mjs` - no framework, no npm; the module is
+loaded through a data: URL so a plain `.js` file imports as ESM without a
+package.json. All ids in the fixture are placeholders.
 
 Related risk this turned up: `discovery.js` prioritises bundle filenames
 matching `/(api|main)\.[0-9a-f]+\.js/`. The newer `x-web` naming
@@ -512,3 +563,27 @@ cannot be produced without a logged-in session — the logged-out shell carries
 no operation table at all.
 
 Still not run against a live account.
+
+### 2026-09-06 — Parser aligned to the live response, plus a safety gate
+
+Four corrections from a parsed live body, and one of them was a safety issue.
+
+- **Root key.** `timeline.timeline`, not `timeline_v2.timeline`. The spec was
+  wrong and the symptom would have been "page one returns zero posts".
+- **Instructions are not positional.** `instructions[0]` is
+  `TimelineClearCache` with no entries; entries are taken only from
+  instructions whose `type` is `TimelineAddEntries`.
+- **SAFETY: strict acceptance.** The entries array also contains a
+  who-to-follow module whose suggested users carry other people's tweet ids.
+  Three-part gate, fail-closed on a missing user id, rejects counted and
+  surfaced. Locked down by `tests/parser.test.mjs`.
+- **Kind per entry, never per operation.** "Originals" means not-retweets, not
+  not-replies.
+
+Also aligned: cursor shape, `quote_count`, and `user.tweet_counts.tweets` as a
+progress denominator.
+
+Multi-stream merging deliberately NOT implemented - waiting on confirmation of
+which operation carries retweets.
+
+Still not run against a live account end to end.

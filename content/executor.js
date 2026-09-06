@@ -165,6 +165,8 @@
           job.pages = state.pages;
           job.cursor = state.cursor;
           job.seenCursors = state.seenCursors;
+          job.rejected = state.rejected;
+          job.reportedTotal = state.reportedTotal;
           await store.set(store.KEY.RATE, state.rate);
           await store.checkpoint(job, all);
           // First page back means the operation is not just present in the
