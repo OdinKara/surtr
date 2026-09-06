@@ -33,14 +33,15 @@ const post = (id, kind = 'post') => ({ id, kind, text: 't' + id });
 const TIMELINES = {
   posts: { selected: 'UserOriginalsTimeline', found: ['UserOriginalsTimeline'] },
   reposts: { selected: 'UserRepostsTimeline', found: ['UserRepostsTimeline'] },
+  replies: { selected: 'UserRepliesTimeline', found: ['UserRepliesTimeline'] },
 };
 
 /* ------------------------------------------------------------- planning --- */
 
 let plan = S.planStreams({ config: { includeKinds: ['post', 'reply', 'retweet'] },
                            timelines: TIMELINES });
-ok(plan.length === 2 && plan[0].key === 'posts' && plan[1].key === 'reposts',
-   'both streams planned, posts FIRST');
+ok(plan.length === 3 && plan[0].key === 'posts' && plan[1].key === 'reposts',
+   'all streams planned, posts FIRST');
 ok(plan.every((s) => s.status === 'pending'), 'both start pending');
 ok(plan[0].op === 'UserOriginalsTimeline' && plan[1].op === 'UserRepostsTimeline',
    'each stream carries its own operation name');
@@ -77,6 +78,115 @@ ok(plan[1].status === 'failed' && plan[1].endReason === 'no-operation',
 ok(plan[0].status === 'pending' && plan[0].op === 'UserOriginalsTimeline',
    'one stream failing to resolve does not stop the other');
 
+/* --------------------------------------------------- the replies stream --- */
+
+plan = S.planStreams({ config: { includeKinds: ['post', 'reply', 'retweet'] },
+                       timelines: TIMELINES });
+ok(plan.length === 3 && plan.map((s) => s.key).join(',') === 'posts,reposts,replies',
+   'three streams planned, in order: posts, reposts, replies');
+ok(plan[2].op === 'UserRepliesTimeline', 'replies uses UserRepliesTimeline');
+
+plan = S.planStreams({ config: { includeKinds: ['retweet'] }, timelines: TIMELINES });
+ok(plan[2].status === 'skipped' && plan[2].endReason === 'skipped-by-filter',
+   'replies is skipped by the same rule when replies are not wanted');
+
+plan = S.planStreams({ config: { includeKinds: ['reply'] }, timelines: TIMELINES });
+ok(plan[0].status === 'pending' && plan[2].status === 'pending',
+   'wanting replies runs BOTH posts and replies - UserOriginalsTimeline carries them too');
+
+plan = S.planStreams({
+  config: { includeKinds: [] },
+  timelines: { ...TIMELINES, replies: { selected: null } },
+});
+ok(plan[2].status === 'failed' && plan[2].endReason === 'no-operation',
+   'an unresolved replies operation fails by name without stopping the others');
+
+/* --------------------------------------- expected vs unexpected overlap --- */
+
+ok(S.isExpectedOverlap('posts', 'replies') && S.isExpectedOverlap('replies', 'posts'),
+   'posts/replies overlap is EXPECTED, in either order');
+ok(!S.isExpectedOverlap('posts', 'reposts'), 'posts/reposts overlap is NOT expected');
+ok(!S.isExpectedOverlap('reposts', 'replies'), 'reposts/replies overlap is NOT expected');
+
+{
+  // A self-reply in a thread genuinely appears in both posts and replies.
+  const all = [];
+  const idOwner = new Map();
+  S.mergePage({ all, idOwner, posts: [post('50', 'reply'), post('51')], streamKey: 'posts' });
+  const r = S.mergePage({ all, idOwner, posts: [post('50', 'reply')], streamKey: 'replies' });
+
+  ok(r.added === 0, 'a self-reply already seen in posts is NOT added twice');
+  ok(all.filter((p) => p.id === '50').length === 1,
+     'the self-reply appears exactly once in the union - not double counted');
+  ok(r.expected.length === 1 && r.unexpected.length === 0,
+     'the posts/replies collision is classified EXPECTED, not a defect signal');
+
+  // The same collision between disjoint streams IS a defect signal.
+  const r2 = S.mergePage({ all, idOwner, posts: [post('51')], streamKey: 'reposts' });
+  ok(r2.unexpected.length === 1 && r2.expected.length === 0,
+     'a posts/reposts collision is classified UNEXPECTED - those should be disjoint');
+  ok(r2.unexpected[0].from === 'reposts' && r2.unexpected[0].owner === 'posts',
+     'the collision records which stream it came from and which owns the id');
+}
+
+/* ---------------------------------------------------------- completeness --- */
+
+{
+  const done = (key, n) => ({ key, label: key, status: 'done', enumerated: n });
+
+  let c = S.completeness({
+    streams: [done('posts', 480), done('reposts', 124)],
+    enumerated: 604, reportedTotal: 2616,
+  });
+  ok(c.complete === false, 'every stream done but 604 of 2616 seen is NOT complete');
+  ok(c.materialShortfall === true && c.shortfall === 2012 && c.percent === 23,
+     'the shortfall is quantified: 2012 missing, 23% seen');
+  ok(/unaccounted for/.test(c.reason || ''), 'the reason names the shortfall');
+
+  c = S.completeness({
+    streams: [done('posts', 480), done('reposts', 124), done('replies', 2000)],
+    enumerated: 2604, reportedTotal: 2616,
+  });
+  ok(c.complete === true,
+     'all three streams done and within tolerance IS complete');
+
+  c = S.completeness({
+    streams: [done('posts', 480), { key: 'replies', label: 'replies', status: 'skipped' }],
+    enumerated: 480, reportedTotal: 2616,
+  });
+  ok(c.complete === false && /skipped/.test(c.reason || ''),
+     'a skipped stream blocks complete and is named as the reason');
+
+  c = S.completeness({
+    streams: [done('posts', 480), { key: 'replies', label: 'replies', status: 'failed',
+                                    enumerated: 3 }],
+    enumerated: 483, reportedTotal: 2616,
+  });
+  ok(c.complete === false && /failed/.test(c.reason || ''),
+     'a failed stream blocks complete and is named as the reason');
+
+  c = S.completeness({
+    streams: [done('posts', 10)], enumerated: 10, reportedTotal: null,
+  });
+  ok(c.complete === true && c.materialShortfall === false,
+     'with no reported total there is nothing to be short of, so the check cannot fire');
+  ok(c.reportedTotal === null, 'the missing total is reported as null, not guessed');
+
+  // Everything done, nothing skipped, still short: the honest answer is "unknown".
+  c = S.completeness({
+    streams: [done('posts', 100), done('reposts', 10), done('replies', 20)],
+    enumerated: 130, reportedTotal: 2616,
+  });
+  ok(/cause unknown/.test(c.reason || ''),
+     'a shortfall with every stream complete says the cause is UNKNOWN rather than inventing one');
+
+  ok(S.shortfallBanner({ materialShortfall: false }) === null,
+     'no banner when there is no material shortfall');
+  ok(/INCOMPLETE/.test(S.shortfallBanner(
+      S.completeness({ streams: [done('posts', 1)], enumerated: 1, reportedTotal: 100 })) || ''),
+     'the banner leads with INCOMPLETE');
+}
+
 /* ---------------------------------------------------------------- merge --- */
 
 {
@@ -93,8 +203,10 @@ ok(plan[0].status === 'pending' && plan[0].op === 'UserOriginalsTimeline',
 
   // THE ONE THAT MATTERS.
   const c = S.mergePage({ all, idOwner, posts: [post('1'), post('4')], streamKey: 'reposts' });
-  ok(c.crossStream.length === 1 && c.crossStream[0] === '1',
+  ok(c.crossStream.length === 1 && c.crossStream[0].id === '1',
      'CROSS-STREAM DUPLICATE COUNTED when the same id arrives from both streams');
+  ok(c.unexpected.length === 1,
+     'a posts/reposts collision is classified as UNEXPECTED - a defect signal');
   ok(c.added === 1, 'the genuinely new id is still added alongside the collision');
   ok(all.filter((p) => p.id === '1').length === 1,
      'the duplicate is deduped - it appears exactly once in the results');
@@ -136,7 +248,10 @@ const cleanReport = S.streamReport({
   key: 'reposts', label: 'reposts', op: 'UserRepostsTimeline', status: 'done',
   enumerated: 12, pages: 1, ceilingSuspected: false, endReason: 'cursor-exhausted',
 }, 3200);
-ok(/complete, 12 item/.test(cleanReport), 'a clean stream reports genuine exhaustion');
+ok(/fully enumerated, 12 item/.test(cleanReport),
+   'a clean stream reports genuine exhaustion');
+ok(/about this stream only, not about the account/.test(cleanReport),
+   'a clean stream scopes its claim to ITSELF and does not imply the account is complete');
 ok(!/reached X's timeline limit/.test(cleanReport),
    'the clean stream is NOT tarred with the other stream\'s ceiling verdict');
 

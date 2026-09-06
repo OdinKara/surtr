@@ -129,6 +129,7 @@ function renderDiscovery(d) {
     setStatus($('st-q1'), null, 'not found');
     row('st-posts', null);
     row('st-reposts', null);
+    row('st-replies', null);
     setStatus($('st-alt'), null, '—');
     return;
   }
@@ -140,6 +141,7 @@ function renderDiscovery(d) {
   const t = d.timelines || {};
   row('st-posts', t.posts);
   row('st-reposts', t.reposts);
+  row('st-replies', t.replies);
 
   const unused = d.unusedCandidates || [];
   setStatus($('st-alt'), null, unused.length ? unused.join(', ') : '—');
@@ -195,20 +197,49 @@ function renderJob(job) {
     banner.hidden = true;
   }
 
-  // Cross-stream duplicates are a DEFECT SIGNAL, not hygiene: these streams are
-  // tab-scoped and should be disjoint.
+  // DID THIS RUN ACTUALLY SEE THE ACCOUNT? A clean endReason per stream is not
+  // an answer to that question. A run that reached a fraction of an account
+  // must never read as complete, so this gets the same prominence as any other
+  // incompleteness banner.
+  const short = $('shortfall');
+  const c = j.completeness;
+  if (c && c.materialShortfall) {
+    short.textContent =
+      'INCOMPLETE: ' + c.enumerated + ' of ' + c.reportedTotal + ' items X reports for ' +
+      'this account (' + c.percent + '%). ' + c.shortfall + ' unaccounted for. ' +
+      (c.reason || '') + '. Do not treat these results as the full account.';
+    short.hidden = false;
+  } else {
+    short.hidden = true;
+  }
+
+  // Cross-stream duplicates between pairs that should be DISJOINT are a defect
+  // signal. posts/replies is excluded - those two overlap by design, and
+  // flagging that as a model error would be crying wolf.
   const dupes = $('dupes');
   if (j.crossStreamDuplicates > 0) {
     dupes.className = 'banner bad';
     dupes.textContent =
-      'CROSS-STREAM DUPLICATES: ' + j.crossStreamDuplicates + ' id(s) arrived from more ' +
-      'than one stream. These streams are meant to be disjoint, so this means the model ' +
-      'of X\u2019s operations is wrong \u2014 worth investigating. ' +
-      'Ids: ' + (j.crossStreamDuplicateIds || []).slice(0, 10).join(', ') +
-      ((j.crossStreamDuplicateIds || []).length > 10 ? ' \u2026' : '');
+      'CROSS-STREAM DUPLICATES: ' + j.crossStreamDuplicates + ' id(s) arrived from two ' +
+      'streams that should be disjoint, so the model of these operations is wrong - ' +
+      'worth investigating. Ids: ' +
+      (j.crossStreamDuplicateIds || []).slice(0, 10).join(', ') +
+      ((j.crossStreamDuplicateIds || []).length > 10 ? ' ...' : '');
     dupes.hidden = false;
   } else {
     dupes.hidden = true;
+  }
+
+  // Expected overlap is informational, never a warning.
+  const overlap = $('overlap');
+  if (j.crossStreamExpected > 0) {
+    overlap.textContent =
+      j.crossStreamExpected + ' item(s) appeared in both the posts and replies streams ' +
+      'and were counted once. Those two overlap by design - UserOriginalsTimeline ' +
+      'returns replies too - so this is expected, not a defect.';
+    overlap.hidden = false;
+  } else {
+    overlap.hidden = true;
   }
 
   // One report per stream. NEVER collapsed into a single verdict: a run can hit
@@ -497,8 +528,16 @@ $('btn-reset').addEventListener('click', async () => {
 function streamsBlock(job) {
   const j = job || {};
   return {
-    complete: (j.streams || []).length > 0 &&
-      (j.streams || []).every((s) => s.status === 'done'),
+    // `complete` requires BOTH that every stream finished AND that the union is
+    // not materially short of what X reports for the account. Either condition
+    // alone is a claim this run cannot support - a live run had every stream
+    // report a clean cursor exhaustion while seeing 23% of the account.
+    complete: Boolean(j.completeness && j.completeness.complete),
+    incompleteReason: (j.completeness && j.completeness.reason) || null,
+    accountTotalReportedByX: (j.completeness && j.completeness.reportedTotal) ?? null,
+    enumerated: (j.completeness && j.completeness.enumerated) ?? (j.enumerated || 0),
+    shortfall: (j.completeness && j.completeness.shortfall) ?? null,
+    percentOfAccount: (j.completeness && j.completeness.percent) ?? null,
     runStatus: j.status || 'unknown',
     streams: (j.streams || []).map((s) => ({
       key: s.key,
@@ -522,8 +561,11 @@ function streamsBlock(job) {
           }
         : null,
     })),
+    // Only between pairs that should be disjoint. posts/replies overlap is
+    // expected and is counted separately.
     crossStreamDuplicates: j.crossStreamDuplicates || 0,
     crossStreamDuplicateIds: j.crossStreamDuplicateIds || [],
+    expectedOverlapDeduped: j.crossStreamExpected || 0,
   };
 }
 
@@ -556,6 +598,28 @@ for (const id of [
   $(id).addEventListener('change', paint);
   $(id).addEventListener('input', paint);
 }
+
+/* ------------------------------------------------------------------ donate --- */
+
+/**
+ * A bare target="_blank" anchor does not reliably navigate from inside a side
+ * panel, so the click is handled explicitly. The href stays on the element as
+ * the semantic target - and so the destination is visible to anyone reading the
+ * markup - this just makes it actually open.
+ *
+ * chrome.tabs.create needs no "tabs" permission: that permission gates reading
+ * a tab's URL and title, not opening one.
+ */
+const DONATE_URL = 'https://donate.grimnirworks.com/';
+
+$('donate').addEventListener('click', (ev) => {
+  ev.preventDefault();
+  if (chrome.tabs && chrome.tabs.create) {
+    chrome.tabs.create({ url: DONATE_URL });
+  } else {
+    window.open(DONATE_URL, '_blank', 'noopener,noreferrer');
+  }
+});
 
 /* ------------------------------------------------------------------- boot --- */
 

@@ -15,7 +15,18 @@
       <small>Bulk X Post Removal</small>
     </span>
   </div>
-  <span class="phase" title="No deletion code exists in this build.">DRY RUN ONLY</span>
+  <div class="top-right">
+    <span class="phase" title="No deletion code exists in this build.">DRY RUN ONLY</span>
+    <a id="donate" href="https://donate.grimnirworks.com/"
+       target="_blank" rel="noopener noreferrer"
+       title="Support GrimnirWorks" aria-label="Support GrimnirWorks">
+      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+           fill="#e5484d" stroke="#e5484d" stroke-width="2" stroke-linecap="round"
+           stroke-linejoin="round" aria-hidden="true">
+        <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"></path>
+      </svg>
+    </a>
+  </div>
 </header>
 
 <!-- Connection ---------------------------------------------------------- -->
@@ -27,6 +38,7 @@
     <dt>UserByScreenName</dt><dd id="st-q1" class="pending">not found</dd>
     <dt>Posts op</dt><dd id="st-posts" class="pending">not found</dd>
     <dt>Reposts op</dt><dd id="st-reposts" class="pending">not found</dd>
+    <dt>Replies op</dt><dd id="st-replies" class="pending">not found</dd>
     <dt>Also in bundle</dt><dd id="st-alt" class="pending">&mdash;</dd>
   </dl>
   <p class="hint">
@@ -149,8 +161,10 @@
     <small id="rate-text">rate limit: not observed yet</small>
   </div>
 
+  <p id="shortfall" class="banner bad" hidden></p>
   <p id="stream-skipped" class="banner" hidden></p>
   <p id="dupes" class="banner" hidden></p>
+  <p id="overlap" class="hint" hidden></p>
   <div id="stream-reports"></div>
   <p id="skipped" class="hint" hidden></p>
   <p id="scan-error" class="error" hidden></p>
@@ -190,14 +204,6 @@
 
 <footer class="foot">
   <span>Surtr &middot; GrimnirWorks &middot; AGPLv3</span>
-  <a id="sponsor" href="https://github.com/sponsors/OdinKara" target="_blank" rel="noreferrer"
-     title="Support Surtr" aria-label="Support Surtr">
-    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
-         fill="#e5484d" stroke="#e5484d" stroke-width="2" stroke-linecap="round"
-         stroke-linejoin="round" aria-hidden="true">
-      <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"></path>
-    </svg>
-  </a>
 </footer>
 
 <script type="module" src="panel.js"></script>

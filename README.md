@@ -189,6 +189,34 @@ so plainly:
 Surtr will not report a clean sweep it cannot verify. If you need genuinely
 complete coverage, request your archive from X first.
 
+### A clean run is not the same as a complete one
+
+X splits your profile into three tab-scoped timelines, and Surtr walks all
+three in turn: **posts**, then **reposts**, then **replies**.
+
+Each stream ends for its own reason, and Surtr reports each separately. It
+deliberately does not collapse them into a single verdict, because a run can
+exhaust one stream cleanly and hit the ceiling on another.
+
+More importantly, **a stream running out of cursor does not mean your account
+was fully enumerated.** Surtr compares what it enumerated against the total X
+reports for the account, and if it is materially short it says so at the top of
+the panel:
+
+> INCOMPLETE: 604 of 2616 items X reports for this account (23%). 2012
+> unaccounted for. Do not treat these results as the full account.
+
+An export is marked `"complete": true` only when **both** every stream finished
+**and** there is no unexplained shortfall. Otherwise it carries
+`"complete": false` and an `incompleteReason`. That rule exists because an
+earlier build reported a run as complete having seen 23% of an account: every
+stream really had exhausted its cursor, and the conclusion was still wrong.
+
+If a filter excludes a whole kind, the matching stream is not walked at all,
+and that is shown as a banner and recorded in the export — a scan that quietly
+did less work than you assumed is the same problem as an export that reads as
+complete and is not.
+
 ### Scope
 
 Posts, replies and retweets. **Likes are not enumerated and not touched.**

@@ -55,6 +55,17 @@ body {
   white-space: nowrap;
 }
 
+
+.top-right { display: flex; align-items: center; gap: 8px; }
+.top-right a {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px;
+  border-radius: 6px;
+  line-height: 0;
+}
+.top-right a:hover { background: var(--surface-2); }
+
 /* ----------------------------------------------------------------- cards */
 
 .card {

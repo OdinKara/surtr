@@ -144,9 +144,19 @@
 
       // Ownership of every id, so a cross-stream collision is detectable.
       // Rebuilt from the results on resume - it has to survive a reload.
+      // The account-wide total, from the USER response. Without it the
+      // completeness check cannot fire at all - see streams.completeness().
+      job.reportedTotal = who.reportedTotal ?? job.reportedTotal ?? null;
+      if (job.reportedTotal === null) {
+        await store.log('warn',
+          'X did not report an account total, so this run cannot check whether it saw the ' +
+          'whole account. Treat the results as a lower bound.');
+      }
+
       const idOwner = streams.ownerMapFrom(all);
       job.crossStreamDuplicates = job.crossStreamDuplicates || 0;
       job.crossStreamDuplicateIds = job.crossStreamDuplicateIds || [];
+      job.crossStreamExpected = job.crossStreamExpected || 0;
       await store.checkpoint(job, all);
 
       if (resuming) {
@@ -197,18 +207,27 @@
             onPage: async (posts, state) => {
               const merged = streams.mergePage({ all, idOwner, posts, streamKey: st.key });
 
-              if (merged.crossStream.length > 0) {
-                // NOT hygiene. These streams are tab-scoped and should be
-                // disjoint, so a collision means our model of the operations is
-                // wrong. Deduped for correctness, then reported loudly.
-                job.crossStreamDuplicates += merged.crossStream.length;
-                job.crossStreamDuplicateIds =
-                  job.crossStreamDuplicateIds.concat(merged.crossStream).slice(0, 200);
+              // Expected vs unexpected. posts/replies MAY legitimately overlap -
+              // UserOriginalsTimeline returns entries with
+              // in_reply_to_status_id_str - so calling that a model error would
+              // be crying wolf. Any other pair should be disjoint and a
+              // collision there really is a finding.
+              if (merged.expected.length > 0) {
+                job.crossStreamExpected += merged.expected.length;
+                await store.log('info',
+                  merged.expected.length + ' id(s) seen in both the ' +
+                  merged.expected[0].owner + ' and ' + st.label + ' streams. Expected - ' +
+                  'those two overlap by design - deduped, not a defect.');
+              }
+              if (merged.unexpected.length > 0) {
+                job.crossStreamDuplicates += merged.unexpected.length;
+                job.crossStreamDuplicateIds = job.crossStreamDuplicateIds
+                  .concat(merged.unexpected.map((c) => c.id)).slice(0, 200);
                 await store.log('warn',
-                  'CROSS-STREAM DUPLICATE: ' + merged.crossStream.length + ' id(s) arrived ' +
+                  'CROSS-STREAM DUPLICATE: ' + merged.unexpected.length + ' id(s) arrived ' +
                   'from ' + st.label + ' that another stream already produced - ' +
-                  merged.crossStream.join(', ') + '. These streams should be disjoint, so ' +
-                  'this is a finding worth reporting, not noise.');
+                  merged.unexpected.map((c) => c.id).join(', ') + '. These streams should ' +
+                  'be disjoint, so this is a finding worth reporting, not noise.');
               }
 
               st.pages = state.pages;
@@ -287,8 +306,20 @@
       }
       if (job.crossStreamDuplicates > 0) {
         await store.log('warn', 'CROSS-STREAM DUPLICATES: ' + job.crossStreamDuplicates +
-          ' total. These streams are meant to be disjoint - investigate.');
+          ' total, between stream pairs that should be disjoint - investigate.');
       }
+
+      // DID THIS RUN ACTUALLY SEE THE ACCOUNT? A clean endReason per stream is
+      // not an answer to that question, and treating it as one is how a run
+      // that reached a fraction of an account reported success.
+      job.completeness = streams.completeness({
+        streams: job.streams,
+        enumerated: all.length,
+        reportedTotal: job.reportedTotal,
+      });
+      await store.checkpoint(job, all);
+      const banner = streams.shortfallBanner(job.completeness);
+      if (banner) await store.log('warn', banner);
 
       // Rate observations are reported PER OPERATION and never combined.
       for (const st of job.streams) {

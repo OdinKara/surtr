@@ -269,6 +269,68 @@ UserOriginalsTimeline does return replies. Kind is classified per entry.
 
 Multi-stream enumeration is BUILT - see below.
 
+### Three streams: replies added after the first live run
+
+The first dry run validated the scanner and immediately showed the scope was
+too narrow. Live results, both streams clean, no 429s:
+
+| stream | operation | pages | enumerated | endReason |
+|---|---|---|---|---|
+| posts | `UserOriginalsTimeline` | 25 | 480 | empty-page |
+| reposts | `UserRepostsTimeline` | 8 | 124 | empty-page |
+
+Cross-stream duplicates: 0. Every permalink the account's own, zero foreign
+authors — the safety gate held on real data. Retweets: 22/22 classified
+correctly, 22/22 with `sourceTweetId`.
+
+**And 604 items against an account reporting 2,616.** Replies are the majority
+of a normal account, and a tool that cannot see 77% of one is not fit for
+purpose, so `UserRepliesTimeline` is now a third stream: posts, then reposts,
+then replies. Same skip-by-filter rule, same per-stream endReason, same
+per-operation rate accounting, same three-part safety gate.
+
+**posts and replies may legitimately overlap.** UserOriginalsTimeline returned
+entries carrying `in_reply_to_status_id_str` in the live capture, so a
+self-reply can appear in both streams. That pair is on an EXPECTED_OVERLAP list:
+the collision is still deduped and counted, but reported as expected rather than
+as a model error. Every other pair stays a defect signal. Flagging X's own model
+as our bug would be crying wolf, and a warning that cries wolf gets ignored
+exactly when it matters.
+
+### A clean endReason is NOT a completeness claim
+
+This was the worst bug in the first live run, and it was a wording bug with
+teeth. Both streams reported
+
+> X ran out of cursor before the ~3200 timeline limit, so this is the full
+> reachable history for this stream.
+
+Every word of that was true per stream. The run had seen 23% of the account.
+
+A clean `endReason` means THIS STREAM exhausted its cursor. It says nothing
+about whether the account was enumerated. The two are now separated:
+
+- Per-stream reports say "this stream is fully enumerated ... a statement about
+  this stream only, not about the account."
+- `streams.completeness()` compares the union against `reportedTotal` and, below
+  95%, marks the run materially short, names the shortfall and the likely cause
+  (which streams did not finish), and — when every stream DID finish and it is
+  still short — says the cause is unknown rather than inventing one.
+- The panel shows an `INCOMPLETE: 604 of 2616 (23%)` banner at the same
+  prominence as the skipped-stream banner.
+- The export's `complete` is true only when **both** every stream is done **and**
+  there is no material shortfall. Otherwise it emits `complete: false` with
+  `incompleteReason`.
+
+### reportedTotal was null, and why that mattered
+
+`tweetCountOf()` only ever read the TIMELINE response, which does not carry the
+count — it lives on the USER response from `UserByScreenName`. So the
+denominator was null on the live run, which is precisely why nothing caught the
+shortfall. It is now read in `resolveUser()`, tried across several shapes, and
+logged when absent (in which case the completeness check cannot fire and the
+results are explicitly a lower bound).
+
 ### CLOSED: no bundle dump needed
 
 The logged-in app still serves `main.<hash>.js` - the initiator column on the
@@ -478,18 +540,28 @@ still stands after this change, which is the test of whether it was done right.
 
 Not implemented. Do it only if a live run actually shows the fetch blocked.
 
-### Rate limits — fill in once observed
+### Rate limits — MEASURED on a live run
 
-| What | Value |
-|---|---|
-| `x-rate-limit-limit` on `UserTweetsAndReplies` | *not yet observed* |
-| Lowest `remaining` seen in a full run | *not yet observed* |
-| 429s in a full run | *not yet observed* |
-| Wall-clock for a full history scan | *not yet observed* |
+Real numbers, from a full two-stream dry run on a real account. Recorded here
+because they were observed, not guessed:
 
-Record what was seen. **Do not turn these into constants in the code** — they
-differ per endpoint and per account, and a guessed ceiling either throttles
-pointlessly or trips a 429 anyway.
+| operation | limit | requests made | lowest remaining seen | 429s |
+|---|---|---|---|---|
+| `UserOriginalsTimeline` | 50 | 25 | 23 | 0 |
+| `UserRepostsTimeline` | 50 | 8 | 41 | 0 |
+
+**The buckets are SEPARATE per operation**, roughly a 15-minute window. That is
+the empirical confirmation of why observations are kept per operation and never
+merged: spending 27 requests on one operation left the other's budget untouched.
+
+**Do not assume deletion inherits any of this.** `DeleteTweet` and
+`DeleteRetweet` will have their own, unknown limits, and there is no reason a
+write endpoint should match a read one. They must be discovered the same way -
+read the headers, back off on 429, log what was observed - and never coded
+against an assumed 50. Getting this wrong on a write endpoint costs more than a
+throttled scan.
+
+Still to record: wall-clock for a full three-stream scan.
 
 ### Tooling
 
@@ -736,3 +808,29 @@ wanted (it is, and should be), and one used too loose a regex to prove a clean
 stream is not tarred with another stream's ceiling verdict.
 
 Ready for a live two-stream dry run. Still not run against a live account.
+
+### 2026-09-06 — Dry run validated the scanner, and moved the goalposts
+
+Live two-stream run: 480 posts + 124 reposts, both clean, no 429s, zero
+cross-stream duplicates, zero foreign authors, 22/22 retweets classified with
+sourceTweetId. The scanner works.
+
+It also enumerated 604 items on an account reporting 2,616, and reported that as
+complete. Four things came out of that:
+
+- **Real rate limits recorded**: 50 per operation, separate buckets, ~15 minute
+  window. Deletion endpoints must NOT be assumed to match.
+- **`reportedTotal` fixed.** It was read off the timeline response, which does
+  not carry it; it lives on the user response. Null denominator is why nothing
+  noticed the shortfall.
+- **The completeness claim is fixed.** A clean per-stream endReason is no longer
+  allowed to imply the account was enumerated, and `complete` in the export now
+  requires no material shortfall as well as every stream finishing.
+- **Replies added as a third stream.** posts/replies overlap is expected and is
+  classified as such rather than reported as a defect.
+
+The donate heart moved to the header, right-aligned, pointing at the donate
+site, and was verified by a real dispatched click opening a tab - not from the
+markup.
+
+Suite: parser 41, streams 59, filters 23. Ready for a three-stream live run.

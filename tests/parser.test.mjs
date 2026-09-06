@@ -41,6 +41,7 @@ const RT_AUTHOR = '2000000000000000004';    // author of a post we retweeted
 const MY_POST = '3000000000000000001';
 const MY_REPLY = '3000000000000000002';
 const MY_RETWEET = '3000000000000000003';
+const MY_SELF_REPLY = '3000000000000000004';
 
 // Ids that must NEVER be enumerated as something of ours.
 const FOREIGN_PINNED_A = '4000000000000000001';
@@ -324,6 +325,53 @@ const oddOne = mod.collectEntries([{
 const oddPost = mod.normalize(oddOne.tweets[0], 'placeholder');
 ok(oddPost.kind === 'post',
    'a non-retweet in the reposts stream classifies as post, not assumed retweet');
+
+/* -------------------------------------------------------------------------
+ * A REPLY FROM THE REPLIES STREAM.
+ *
+ * Kind is decided by the ENTRY, never by which stream it arrived in, so a reply
+ * out of UserRepliesTimeline must classify as "reply" for the same reason one
+ * out of UserOriginalsTimeline does: in_reply_to_status_id_str is present.
+ * ------------------------------------------------------------------------- */
+
+const repliesInstructions = [
+  { type: 'TimelineClearCache' },
+  {
+    type: 'TimelineAddEntries',
+    entries: [
+      tweetEntry('tweet-' + MY_REPLY, tweetResult(MY_REPLY, ME, {
+        in_reply_to_status_id_str: '3000000000000000000',
+        in_reply_to_screen_name: 'someone',
+      })),
+      // A self-reply: replying to my own post, which is what makes a thread and
+      // what makes posts/replies overlap.
+      tweetEntry('tweet-' + MY_SELF_REPLY, tweetResult(MY_SELF_REPLY, ME, {
+        in_reply_to_status_id_str: MY_POST,
+        in_reply_to_user_id_str: ME,
+        in_reply_to_screen_name: 'placeholder',
+      })),
+      // A stranger's reply in the same thread must still be refused.
+      tweetEntry('tweet-' + FOREIGN_TWEET, tweetResult(FOREIGN_TWEET, STRANGER, {
+        in_reply_to_status_id_str: MY_POST,
+      })),
+    ],
+  },
+];
+
+const rep = mod.collectEntries(repliesInstructions, { expectedUserId: ME });
+ok(rep.accepted === 2, 'replies stream: my reply and my self-reply accepted, stranger refused');
+
+const repPosts = rep.tweets.map((t) => mod.normalize(t, 'placeholder'));
+ok(repPosts.every((p) => p.kind === 'reply'),
+   'both classify as kind "reply" from the entry, not from the stream');
+ok(!JSON.stringify(repPosts).includes(FOREIGN_TWEET),
+   "a stranger's reply in my thread is not enumerated");
+ok(/FOREIGN AUTHOR/.test(Object.keys(rep.rejected).join(' ')),
+   'the stranger reply is counted as FOREIGN AUTHOR');
+
+const selfReply = repPosts.find((p) => p.id === MY_SELF_REPLY);
+ok(selfReply.sourceTweetId === null,
+   'a self-reply is not a retweet, so it carries no sourceTweetId');
 
 /* positional indexing would have found nothing */
 ok(mod.collectEntries([instructions[0]], { expectedUserId: ME }).accepted === 0,
