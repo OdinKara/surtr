@@ -161,10 +161,28 @@ function renderJob(job) {
   $('btn-stop').disabled = !busy;
   const resumable = (j.streams || []).some(
     (s) => s.status === 'pending' || s.status === 'running');
+  // The button says which of the two states the run is in. "Scanning..." while
+  // actually asleep for fifteen minutes is the exact ambiguity this fixes.
   $('btn-scan').textContent =
-    j.status === store.JOB_RUNNING ? 'Scanning...'
+    j.rateLimited ? 'Rate limited - waiting'
+    : j.status === store.JOB_RUNNING ? 'Scanning...'
     : (resumable && j.enumerated) ? 'Resume dry-run scan'
     : 'Start dry-run scan';
+
+  // The rate-limit banner: a live countdown to the window boundary. The wait is
+  // interruptible, so Stop still works while it runs.
+  const wait = $('rate-wait');
+  if (j.rateLimited) {
+    const rl = j.rateLimited;
+    wait.textContent =
+      'RATE LIMITED on ' + rl.operationName + ' \u2014 resuming in ' +
+      countdown(rl.resetAtMs) +
+      (rl.limit ? '. Budget ' + rl.requests + ' / ' + rl.limit + ' this window' : '') +
+      '. The scan is waiting, not stuck; Stop still works.';
+    wait.hidden = false;
+  } else {
+    wait.hidden = true;
+  }
 
   // Cumulative pages with the per-stream breakdown, so a single number never
   // has to be explained and never appears to jump backwards.
@@ -174,10 +192,15 @@ function renderJob(job) {
   if (j.streams && j.streams.length) {
     const cur = (j.streams || []).find((s) => s.key === j.currentStream);
     const idx = cur ? j.streams.indexOf(cur) + 1 : null;
+    const rl = j.rateLimited;
+    const state = rl ? 'RATE LIMITED, resuming in ' + countdown(rl.resetAtMs) : 'running';
     line.textContent =
       (cur ? 'stream ' + idx + ' of ' + j.streams.length + ' \u00b7 ' + cur.label +
-             ' \u00b7 ' + cur.op + ' \u00b7 running' : 'streams idle') +
-      (breakdown ? '   |   pages ' + (j.pages || 0) + ' (' + breakdown + ')' : '');
+             ' \u00b7 ' + cur.op + ' \u00b7 ' + state : 'streams idle') +
+      (breakdown ? '   |   pages ' + (j.pages || 0) + ' (' + breakdown + ')' : '') +
+      (cur && cur.rate && cur.rate.limit
+        ? '   |   ' + cur.rate.requests + ' / ' + cur.rate.limit + ' requests this window'
+        : '');
     line.hidden = false;
   } else {
     line.hidden = true;
@@ -203,7 +226,14 @@ function renderJob(job) {
   // incompleteness banner.
   const short = $('shortfall');
   const c = j.completeness;
-  if (c && c.materialShortfall) {
+  if (c && c.unknownTotal) {
+    // Cannot assess is NOT the same as complete, and must not read like it.
+    short.textContent =
+      'LOWER BOUND: X reported no account total, so there is no way to tell whether this ' +
+      'run saw everything. ' + c.enumerated + ' item(s) enumerated. Completeness cannot be ' +
+      'assessed - do not read this as a complete sweep.';
+    short.hidden = false;
+  } else if (c && c.materialShortfall) {
     short.textContent =
       'INCOMPLETE: ' + c.enumerated + ' of ' + c.reportedTotal + ' items X reports for ' +
       'this account (' + c.percent + '%). ' + c.shortfall + ' unaccounted for. ' +
@@ -598,6 +628,30 @@ for (const id of [
   $(id).addEventListener('change', paint);
   $(id).addEventListener('input', paint);
 }
+
+/* --------------------------------------------------------------- countdown --- */
+
+/** mm:ss until an absolute epoch-ms boundary. */
+function countdown(untilMs) {
+  const left = Math.max(0, Math.round((Number(untilMs) - Date.now()) / 1000));
+  const m = Math.floor(left / 60);
+  const s = left % 60;
+  return m + ':' + String(s).padStart(2, '0');
+}
+
+/**
+ * The countdown has to tick on its own.
+ *
+ * Storage does not change while a stream sleeps, so the storage.onChanged
+ * repaint never fires and the panel would sit on a number that never moves -
+ * which looks exactly like the hang it is supposed to distinguish itself from.
+ * This is the one thing in the panel driven by a timer rather than by state.
+ */
+setInterval(async () => {
+  const job = await store.readJob();
+  if (!job || !job.rateLimited) return;
+  renderJob(job);
+}, 1000);
 
 /* ------------------------------------------------------------------ donate --- */
 

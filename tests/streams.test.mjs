@@ -165,12 +165,22 @@ ok(!S.isExpectedOverlap('reposts', 'replies'), 'reposts/replies overlap is NOT e
   ok(c.complete === false && /failed/.test(c.reason || ''),
      'a failed stream blocks complete and is named as the reason');
 
+  // THIS ASSERTION USED TO SAY complete === true, and that was the bug in
+  // miniature: with no denominator the check cannot run, and a check that
+  // cannot run must never answer "yes". Absence of evidence is not evidence of
+  // a clean sweep.
   c = S.completeness({
     streams: [done('posts', 10)], enumerated: 10, reportedTotal: null,
   });
-  ok(c.complete === true && c.materialShortfall === false,
-     'with no reported total there is nothing to be short of, so the check cannot fire');
+  ok(c.complete === false,
+     'with NO reported total the run is NOT complete - the check cannot assess it');
+  ok(c.unknownTotal === true,
+     'unknownTotal distinguishes "cannot tell" from "came up short"');
+  ok(c.materialShortfall === false,
+     'and it is not reported as a shortfall either - we do not know that');
   ok(c.reportedTotal === null, 'the missing total is reported as null, not guessed');
+  ok(/LOWER BOUND/.test(S.shortfallBanner(c) || ''),
+     'the banner for an unknown total says LOWER BOUND, not complete');
 
   // Everything done, nothing skipped, still short: the honest answer is "unknown".
   c = S.completeness({

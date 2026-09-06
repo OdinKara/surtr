@@ -322,14 +322,73 @@ about whether the account was enumerated. The two are now separated:
   there is no material shortfall. Otherwise it emits `complete: false` with
   `incompleteReason`.
 
-### reportedTotal was null, and why that mattered
+### reportedTotal: wrong diagnosis, wrong fix, twice
 
-`tweetCountOf()` only ever read the TIMELINE response, which does not carry the
-count — it lives on the USER response from `UserByScreenName`. So the
-denominator was null on the live run, which is precisely why nothing caught the
-shortfall. It is now read in `resolveUser()`, tried across several shapes, and
-logged when absent (in which case the completeness check cannot fire and the
-results are explicitly a lower bound).
+Worth recording as a method failure, not just a bug.
+
+The count came back null on the first live run. The diagnosis was that the
+timeline response does not carry it and it lives on the user response, so the
+read moved to `resolveUser()` — **and it was reported fixed on the strength of
+code that had never been exercised.** The second live run returned null again on
+all three streams, so `accountTotalReportedByX`, `shortfall` and
+`percentOfAccount` were all null and the INCOMPLETE banner could not fire.
+
+**A guard that cannot trigger is identical to no guard.** That failure class —
+a safety net that reports success because it never actually ran — has come up
+repeatedly across this studio's tooling, and every earlier instance was caught
+by inspecting the artifact rather than trusting the exit code. This one was
+caught only because a live export was read.
+
+The timeline response *does* carry the count. It is on the author object
+embedded in every tweet entry:
+
+```
+entry.content.itemContent.tweet_results.result.core.user_results.result.tweet_counts.tweets
+        -> {"media_tweets": 86, "tweets": 2616}
+```
+
+It is now read from the **first accepted entry of the first page** — accepted
+meaning the three-part gate passed, so the author is us and the count is ours —
+with the `resolveUser()` user-response path kept as a secondary. The four
+speculative paths added during the second attempt are **removed**: guessing more
+paths was what made the failure look like a fix.
+
+`job.reportedTotalSource` records which source answered, and it is logged, so
+the next live run reports whether this worked rather than anyone taking my word
+for it.
+
+And the silent degradation is closed: `completeness()` used to return
+`complete: true` when the total was unknown. Absence of evidence was reading as
+evidence of a clean sweep. It now returns `complete: false` with
+`unknownTotal: true`, and the panel says **LOWER BOUND … completeness cannot be
+assessed**. A test asserting the old behaviour was corrected — it had encoded
+the bug.
+
+### BLOCKED: the replies stream enumerates nothing
+
+`UserRepliesTimeline` returns 50+ pages and enumerates **zero**. The rejection
+counter tells the story:
+
+```
+1 x who-to-follow (not a TimelineTimelineItem)
+1000 x profile-conversation (not a TimelineTimelineItem)
+```
+
+Replies come back wrapped in **`profile-conversation` module entries**, not as
+flat `TimelineTimelineItem` entries, so the three-part gate refuses every one of
+them. **The gate behaved correctly and failed closed** — which is the designed
+behaviour and the right outcome for an unrecognised shape — but it means replies
+are unreachable and the ~2,000 shortfall cannot close.
+
+Not fixed yet, deliberately: the parser change is **the highest-risk one in the
+project so far**. A conversation module contains other participants' tweets by
+definition — the person being replied to is in there — so walking into modules
+must enumerate only our own replies and never the other participants' posts. The
+author check does not get relaxed, and "walk into modules" must be scoped to
+conversation modules specifically: the `who-to-follow` module is a module too
+and must still be rejected whole.
+
+Waiting on a captured `UserRepliesTimeline` body before touching it.
 
 ### CLOSED: no bundle dump needed
 
@@ -540,28 +599,54 @@ still stands after this change, which is the test of whether it was done right.
 
 Not implemented. Do it only if a live run actually shows the fetch blocked.
 
-### Rate limits — MEASURED on a live run
+### Rate limits — the observed model
 
-Real numbers, from a full two-stream dry run on a real account. Recorded here
-because they were observed, not guessed:
+Measured, not assumed. Two live runs:
 
-| operation | limit | requests made | lowest remaining seen | 429s |
+| operation | limit | requests | lowest remaining | 429s |
 |---|---|---|---|---|
-| `UserOriginalsTimeline` | 50 | 25 | 23 | 0 |
+| `UserOriginalsTimeline` | 50 | 26 (25 pages) | **0** | **1** |
 | `UserRepostsTimeline` | 50 | 8 | 41 | 0 |
 
-**The buckets are SEPARATE per operation**, roughly a 15-minute window. That is
-the empirical confirmation of why observations are kept per operation and never
-merged: spending 27 requests on one operation left the other's budget untouched.
+**The model:** 50 requests per operation per **fixed ~15-minute window**,
+separate buckets per operation, the counter refilling **at the window boundary
+rather than sliding**. `x-rate-limit-reset` is an absolute timestamp for that
+boundary, which is what makes a real countdown possible rather than a guess.
 
-**Do not assume deletion inherits any of this.** `DeleteTweet` and
-`DeleteRetweet` will have their own, unknown limits, and there is no reason a
-write endpoint should match a read one. They must be discovered the same way -
-read the headers, back off on 429, log what was observed - and never coded
-against an assumed 50. Getting this wrong on a write endpoint costs more than a
-throttled scan.
+Separate buckets is the empirical case for keeping observations per operation:
+spending 26 requests on one left the other's budget untouched.
 
-Still to record: wall-clock for a full three-stream scan.
+### The 429 path is PROVEN, not assumed
+
+The posts stream took a real 429 — `observed429s: 1`, `lowestRemainingSeen: 0`,
+26 requests for 25 pages — **and still completed with all 480 items and
+`endReason: empty-page`.** The adaptive backoff waited out the window, resumed,
+and did not lose the queue.
+
+That matters well beyond this scan: **it is the same path phase 2 depends on for
+a WRITE endpoint.** A deletion run will be long, will certainly hit limits, and
+must survive them without losing its place or double-acting. The read side has
+now demonstrated that behaviour against a real limit rather than a simulated
+one.
+
+It does **not** license assuming the numbers carry over. `DeleteTweet` and
+`DeleteRetweet` have their own unknown limits and must be discovered the same
+way — read the headers, back off, log what was seen. A write endpoint that gets
+this wrong costs more than a throttled scan.
+
+### A rate-limit wait must never look like a hang
+
+A stream sleeping out a 15-minute window used to show "Scanning..." with frozen
+counters and stale reports. That is the same defect class as everything else
+here: **a UI that looks identical whether it is working or dead.**
+
+Now: the status line reads
+`stream 3 of 3 · replies · UserRepliesTimeline · RATE LIMITED, resuming in 13:41`
+with a countdown driven by its own timer (storage does not change during the
+wait, so the normal repaint never fires — this is the one thing in the panel on
+an interval rather than on state), the button reads "Rate limited - waiting",
+a pulsing banner shows the window budget, and **the wait is interruptible** so
+Stop works during it instead of being ignored for a quarter of an hour.
 
 ### Tooling
 
@@ -834,3 +919,29 @@ site, and was verified by a real dispatched click opening a tab - not from the
 markup.
 
 Suite: parser 41, streams 59, filters 23. Ready for a three-stream live run.
+
+### 2026-09-06 — Three-stream run: rate-limit UI, and the total finally read from the right place
+
+Live three-stream run. posts and reposts clean; replies enumerated nothing.
+
+- **FIXED: a rate-limit wait no longer looks like a hang.** Live countdown to
+  the window boundary, distinct button state, window budget, pulsing banner, and
+  the wait is now interruptible so Stop works during it. Verified in a loaded
+  panel by seeding the state and confirming the countdown MOVES on its own
+  (13:41 -> 13:39 with no state change).
+- **FIXED: reportedTotal.** Read from the author object embedded in the first
+  accepted entry. My previous diagnosis was wrong and the previous fix was
+  reported on unexercised code; `reportedTotalSource` is now recorded and logged
+  so the next run proves it instead of me claiming it.
+- **FIXED: unknown total no longer reads as complete.** `complete: false` with
+  `unknownTotal: true`, and a LOWER BOUND banner.
+- **RECORDED: the 429 path is proven** against a real 429, and the rate-limit
+  model is now observed rather than guessed.
+- **BLOCKED: replies.** `profile-conversation` modules; parser change held until
+  a live body is captured. The gate failing closed here is correct behaviour.
+- **UNPROVEN: the overlap counters.** `crossStreamDuplicates: 0` and
+  `expectedOverlapDeduped: 0` mean nothing yet, because the replies stream
+  produced nothing to collide with. Re-check both once conversation-module
+  parsing lands.
+
+Suite: parser 46, streams 62, filters 23.

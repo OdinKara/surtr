@@ -256,6 +256,20 @@ button.ghost { background: transparent; }
 #stream-reports .termination.failed { border-left-color: var(--bad); }
 #stream-reports .termination.skipped { border-left-color: var(--muted); }
 
+
+/* A stream sleeping out a rate limit must never look like a hung one. The
+ * countdown ticks and the row pulses, so "working" and "dead" are visibly
+ * different states. */
+.banner.waiting {
+  border-left-color: var(--ember);
+  color: var(--ember);
+  animation: surtr-pulse 1.6s ease-in-out infinite;
+}
+@keyframes surtr-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
+@media (prefers-reduced-motion: reduce) {
+  .banner.waiting { animation: none; }
+}
+
 /* -------------------------------------------------------------- results */
 
 .tablewrap { max-height: 320px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }

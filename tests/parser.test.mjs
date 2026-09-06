@@ -373,6 +373,36 @@ const selfReply = repPosts.find((p) => p.id === MY_SELF_REPLY);
 ok(selfReply.sourceTweetId === null,
    'a self-reply is not a retweet, so it carries no sourceTweetId');
 
+/* -------------------------------------------------------------------------
+ * THE ACCOUNT TOTAL, from where it actually lives.
+ *
+ * Not on the timeline root and not (reliably) on the user response: it is on
+ * the AUTHOR OBJECT embedded in every tweet entry. Captured live as
+ * {"media_tweets": 86, "tweets": 2616}. Two previous attempts to read this
+ * from guessed paths returned null on a live run, which left the completeness
+ * guard with no denominator - a guard that cannot fire being identical to no
+ * guard at all.
+ * ------------------------------------------------------------------------- */
+
+{
+  const withCount = tweetResult(MY_POST, ME);
+  withCount.core = {
+    user_results: { result: { legacy: { screen_name: 'placeholder' },
+                              tweet_counts: { media_tweets: 86, tweets: 2616 } } },
+  };
+  ok(mod.accountTotalFromTweet(withCount) === 2616,
+     'account total read from the author object embedded in a tweet entry');
+
+  ok(mod.accountTotalFromTweet(tweetResult(MY_POST, ME)) === null,
+     'an entry without the count returns null rather than a guess');
+  ok(mod.accountTotalFromTweet(null) === null, 'a missing result does not throw');
+
+  ok(mod.tweetCountOf({ data: { user: { result: { tweet_counts: { tweets: 99 } } } } }) === 99,
+     'the secondary source still reads the user response');
+  ok(mod.tweetCountOf({ data: { user: { result: {} } } }) === null,
+     'the secondary source returns null when absent, with no speculative fallbacks');
+}
+
 /* positional indexing would have found nothing */
 ok(mod.collectEntries([instructions[0]], { expectedUserId: ME }).accepted === 0,
    'a TimelineClearCache-only instruction set yields no entries and does not throw');

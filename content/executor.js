@@ -144,13 +144,12 @@
 
       // Ownership of every id, so a cross-stream collision is detectable.
       // Rebuilt from the results on resume - it has to survive a reload.
-      // The account-wide total, from the USER response. Without it the
-      // completeness check cannot fire at all - see streams.completeness().
-      job.reportedTotal = who.reportedTotal ?? job.reportedTotal ?? null;
-      if (job.reportedTotal === null) {
-        await store.log('warn',
-          'X did not report an account total, so this run cannot check whether it saw the ' +
-          'whole account. Treat the results as a lower bound.');
+      // The account total. SECONDARY source here (the user response); the
+      // primary is read off the first accepted entry of the first page, in
+      // walkTimeline, and overwrites this if it lands.
+      if (job.reportedTotal == null && who.reportedTotal != null) {
+        job.reportedTotal = who.reportedTotal;
+        job.reportedTotalSource = 'user-response';
       }
 
       const idOwner = streams.ownerMapFrom(all);
@@ -202,6 +201,14 @@
             seenCursors: st.seenCursors || [],
             onLog,
             shouldAbort,
+            // A stream sleeping out a rate limit must be visibly alive. This
+            // publishes the window boundary so the panel can count down to it.
+            onRateLimit: async (info) => {
+              job.rateLimited = info
+                ? { ...info, streamKey: st.key, label: st.label }
+                : null;
+              await store.checkpoint(job, all);
+            },
             // THE CHECKPOINT. Every page, without exception, writing the whole
             // streams array so a reload resumes mid-stream.
             onPage: async (posts, state) => {
@@ -236,6 +243,13 @@
               st.enumerated += merged.added;
               st.rate = state.rate;          // this operation's own numbers only
               st.reportedTotal = state.reportedTotal;
+              // Primary source wins. Without a denominator the completeness
+              // check cannot fire at all, and a guard that cannot trigger is
+              // identical to no guard.
+              if (state.reportedTotal != null && job.reportedTotal == null) {
+                job.reportedTotal = state.reportedTotal;
+                job.reportedTotalSource = state.reportedTotalSource || 'timeline-entry';
+              }
               st.rejected = state.rejected;
 
               const partition = filters.partition(all, config);
@@ -275,6 +289,7 @@
 
       // --- finish ----------------------------------------------------------
       job.currentStream = null;
+      job.rateLimited = null;
       for (const st of job.streams) {
         if (!st.termination) st.termination = streams.streamReport(st, enumerate.CEILING_HINT);
       }
@@ -317,6 +332,13 @@
         enumerated: all.length,
         reportedTotal: job.reportedTotal,
       });
+      await store.log(
+        job.reportedTotal == null ? 'warn' : 'info',
+        job.reportedTotal == null
+          ? 'ACCOUNT TOTAL UNKNOWN: X reported no item count from either source, so ' +
+            'completeness cannot be assessed. These results are a LOWER BOUND.'
+          : 'account total ' + job.reportedTotal + ' (source: ' +
+            (job.reportedTotalSource || 'unknown') + ')');
       await store.checkpoint(job, all);
       const banner = streams.shortfallBanner(job.completeness);
       if (banner) await store.log('warn', banner);
