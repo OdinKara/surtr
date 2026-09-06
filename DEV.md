@@ -243,29 +243,20 @@ pointlessly or trips a 429 anyway.
 
 ### Tooling
 
-- **Pre-commit PII sweep is installed** in this repo's `.git/hooks/pre-commit`,
-  copied from the canonical machine-level copy. Hooks are not pushed, so a fresh
-  clone has to reinstall it. The sweep script and its watch-list live outside
-  every repo on purpose — the watch-list enumerates the identifiers being
-  watched for, so committing it would itself be the leak.
-- Every failure path in that hook exits non-zero. A missing script blocks the
-  commit rather than warning: a safety net that reports success when it did not
-  run is worse than none. That now extends to the watch-list itself: an
-  unrecognized rule prefix, an empty value after a recognized one, or a
-  malformed `allow:` all abort with exit 2 and name the line, so a rule can
-  never be present in the file but absent from the compiled rule set.
-- Scaffolding this repo turned up a false positive worth remembering. One
-  watched identifier is the upper-case name of an environment variable used on
-  the lab boxes; the rule matched case-insensitively, so it also hit
-  `auth_token` — the standard session-cookie name — in all five files that
-  mention it, every one of them in a comment saying Surtr deliberately never
-  touches it. The fix was to make that rule case-sensitive and add a separate
-  value-shaped rule (`auth_token` adjacent to 40 hex characters), because the
-  NAME is not a secret and the VALUE is. There is a test harness for all of
-  this next to the sweep script.
-- Note that the upper-case form is still watched, and still blocks — writing it
-  out in this file is what tripped the hook while committing this very note.
-  Working as designed; the sentence above was reworded rather than allowlisted.
+- **A pre-commit secret-scanning hook is installed** in this repo's
+  `.git/hooks/pre-commit`. Git hooks are not pushed, so a fresh clone has to
+  reinstall it; it comes from the studio's tooling, which is kept outside every
+  repo.
+- **It hard-fails, never warns.** Every failure path exits non-zero — including
+  the ones where the scanner could not run at all, not just the ones where it
+  found something. A safety net that reports success when it did not run is
+  worse than no safety net, because it gets trusted.
+- **It blocked its own author twice while this repo was being written.** Once on
+  a false positive, once correctly. Neither commit landed until the text was
+  changed; neither was bypassed, and no exemption was added to get past either.
+  That is worth stating plainly rather than tidying away: a scanner that has
+  never stopped anyone has not been tested, and this one has now been tested
+  against the person most motivated to wave it through.
 
 ### Public-safety rules for this repo
 
@@ -289,7 +280,7 @@ is not retroactively cleanable in any way that matters:
 
 - Created the repo **private**. `.gitignore` written and staged **before** any
   source file entered the tree.
-- Installed the canonical pre-commit PII sweep into `.git/hooks/`.
+- Installed the studio's pre-commit secret-scanning hook into `.git/hooks/`.
 - Wrote the full phase-1 tree: manifest, background relay, executor, five lib
   modules, side panel.
 - AGPL-3.0 `LICENSE` added.
@@ -325,8 +316,38 @@ Four changes, none of them touching the scanner logic.
   `chrome.downloads` is genuinely gone from the panel's API surface and that
   both files still land, with the CSV correctly quoting a field containing a
   comma and quotes. README permission table is down to two rows.
-- Machine-level sweep tooling gained case-sensitive rule prefixes, a
-  value-shaped `auth_token` rule, hard-fail on empty rule values, and a test
-  harness. See Tooling above.
+- The studio's machine-level scanning tooling was hardened alongside this and
+  gained a test harness. Details are kept outside this repo; see Tooling
+  above for what is relevant here.
 
 Still not run against a live account. That remains job one.
+
+### 2026-09-06 — DEV.md made public-safe
+
+This repo is going public **with its history intact**, which is unusual for the
+studio: the normal go-public sequence starts a fresh `git init`, because a
+handoff file written for a private project cannot be selectively cleaned out of
+old commits afterwards.
+
+The exception is deliberate. The commit trail here — including the pre-commit
+hook stopping its own author — is part of the argument for a tool that asks
+permission to delete your posts in bulk, and that argument is worth more than a
+tidy history. But it only works if this file is public-safe **from here
+forward**, not scrubbed at flip time. So the split happened now, at two commits,
+while it was still cheap.
+
+- Machine-level tooling detail — anything about the scanning setup beyond the
+  fact that it exists and hard-fails — moved out of this file to a location
+  outside every git working tree. Nothing was added to `.gitignore` for it: an
+  ignore entry naming a private file is itself a pointer to that file.
+- This file now keeps only Surtr's own technical state: stack, repo-relative
+  paths, the manifest and README departures, the MV3 CORS correction, response
+  shapes to re-check, what's next, and this log.
+- The hook-blocked-its-author story stays, rewritten to name nothing. It is a
+  feature of the project, not an incident to bury.
+- Full history was audited first — every blob in every commit and both commit
+  messages — for absolute machine paths, lab hostnames, LAN addresses,
+  environment-variable names, handles and user ids. Nothing of that kind is
+  committed.
+
+Still not run against a live account.
