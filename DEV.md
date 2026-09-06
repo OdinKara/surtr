@@ -93,6 +93,13 @@ ui/panel.{html,css,js}   side panel
   requests-per-window number. All three are discovered or observed.
 - **`ct0` is read fresh on every request.** It rotates. A cached one starts
   returning 403 mid-run and looks exactly like a revoked session.
+- **Two permissions, and adding a third needs an argument.** `storage` and
+  `sidePanel`, plus the one host permission. `downloads` and `unlimitedStorage`
+  were both dropped: exports use a blob URL and an anchor click from the panel,
+  which needs no permission at all, and the ~3,200 timeline ceiling keeps the
+  result set inside the default storage quota. Do not reach for
+  `chrome.downloads` again to save a file the user just clicked a button to
+  save.
 
 ### The one deviation from the original spec, and why
 
@@ -107,7 +114,11 @@ The addition is scoped as tightly as it can be:
 
 ```json
 "web_accessible_resources": [
-  { "resources": ["lib/*.js"], "matches": ["https://x.com/*"] }
+  {
+    "resources": ["lib/*.js"],
+    "matches": ["https://x.com/*"],
+    "use_dynamic_url": true
+  }
 ]
 ```
 
@@ -116,6 +127,27 @@ no CSP, and exposes no secret — those files are already published in a repo
 that is going public. The alternatives were worse: bundling (breaks the "no
 build step" security argument) or moving orchestration into the service worker
 (breaks "the worker holds no state", which is the whole MV3 survival story).
+
+**`use_dynamic_url: true` is the important half of that entry.** A
+web-accessible resource under a stable extension id is a fingerprinting oracle:
+any x.com page could `fetch('chrome-extension://<id>/lib/api.js')` and learn
+that Surtr is installed. X has an active interest in knowing that. The dynamic
+URL swaps the id for a per-session random token, so there is no stable string to
+probe for.
+
+Verified empirically rather than assumed, because the flag interacts with the
+dynamic `import()` the executor depends on. Both variants were loaded headless
+and evaluated inside the content script's isolated world:
+
+| | `getURL('lib/store.js')` | `import()` |
+|---|---|---|
+| without the flag | `chrome-extension://<extension id>/lib/store.js` | works |
+| with the flag | `chrome-extension://6abf90b2-58c5-…/lib/store.js` | works |
+
+So `chrome.runtime.getURL()` transparently returns the dynamic form to the
+content script and the import sites need no change. The control run matters as
+much as the test: without it, "the imports still work" would not distinguish
+"the flag is safe" from "the flag did nothing".
 
 ### README accuracy note
 
@@ -165,9 +197,36 @@ cross-origin request and succeeds only because X's CDN serves those assets with
 If it turns out CORS blocks it, the failure is loud, not silent: `discover()`
 catches per-URL fetch errors, logs `skipped <file>: <error>`, and ends with
 `missing: [bearer, ...]`, which the panel shows and which unlocks the manual
-override. The fix if it ever happens is to add `https://abs.twimg.com/*` to
-`host_permissions` - a real permission widening, so it needs a line in the
-README's permission table, not a quiet edit.
+override.
+
+**The fallback is NOT "add the host permission".** An earlier version of this
+note said it was, and that was wrong. **In MV3 a content script follows the
+HOST PAGE's CORS policy and does not inherit the extension's host permissions**
+- the CORS bypass content scripts had under MV2 was removed in the MV3
+transition, precisely so that a compromised page cannot borrow an extension's
+reach. Adding `https://abs.twimg.com/*` to `host_permissions` on its own would
+change nothing about a fetch issued from `content/executor.js`; it would look
+like a fix, ship as a fix, and fail identically.
+
+The actual fallback is two changes together:
+
+1. Add `https://abs.twimg.com/*` to `host_permissions` - a real permission
+   widening, so it needs a row in the README's permission table, not a quiet
+   edit.
+2. **Relocate the bundle fetch out of the content script and into
+   `background.js`**, which is an extension context and therefore does get the
+   CORS bypass that host permission grants. The executor asks for the bundle
+   text over runtime messaging and keeps doing all the parsing itself.
+
+Constraint on doing that, and it is not negotiable: the worker's half is a
+**stateless fetch-and-return** - receive a URL, check it is an allowed host,
+fetch with `credentials: 'omit'`, return the text. No discovery logic, no
+caching, no job state, nothing that has to survive the worker being killed.
+`lib/discovery.js` keeps every decision; the worker only holds the one privilege
+the content script cannot have. The rule that `background.js` holds no state
+still stands after this change, which is the test of whether it was done right.
+
+Not implemented. Do it only if a live run actually shows the fetch blocked.
 
 ### Rate limits — fill in once observed
 
@@ -191,7 +250,22 @@ pointlessly or trips a 429 anyway.
   watched for, so committing it would itself be the leak.
 - Every failure path in that hook exits non-zero. A missing script blocks the
   commit rather than warning: a safety net that reports success when it did not
-  run is worse than none.
+  run is worse than none. That now extends to the watch-list itself: an
+  unrecognized rule prefix, an empty value after a recognized one, or a
+  malformed `allow:` all abort with exit 2 and name the line, so a rule can
+  never be present in the file but absent from the compiled rule set.
+- Scaffolding this repo turned up a false positive worth remembering. One
+  watched identifier is the upper-case name of an environment variable used on
+  the lab boxes; the rule matched case-insensitively, so it also hit
+  `auth_token` — the standard session-cookie name — in all five files that
+  mention it, every one of them in a comment saying Surtr deliberately never
+  touches it. The fix was to make that rule case-sensitive and add a separate
+  value-shaped rule (`auth_token` adjacent to 40 hex characters), because the
+  NAME is not a secret and the VALUE is. There is a test harness for all of
+  this next to the sweep script.
+- Note that the upper-case form is still watched, and still blocks — writing it
+  out in this file is what tripped the hook while committing this very note.
+  Working as designed; the sentence above was reworded rather than allowlisted.
 
 ### Public-safety rules for this repo
 
@@ -226,3 +300,33 @@ is not retroactively cleanable in any way that matters:
 - Narrowed the README's `connect-src` claim to the one that is actually true,
   for the reason recorded under KEY FACTS.
 - Not yet run against a live account.
+
+### 2026-09-06 — Hardening pass
+
+Four changes, none of them touching the scanner logic.
+
+- **Corrected the CORS fallback note.** It said the fix for a blocked
+  `abs.twimg.com` fetch was to add the host permission. That was wrong: in MV3 a
+  content script follows the host page's CORS policy and does NOT inherit the
+  extension's host permissions — that bypass was removed in the MV2 transition.
+  Adding the permission alone would have looked like a fix and failed
+  identically. The note now says the fallback is the host permission **plus**
+  relocating the bundle fetch into `background.js` as a stateless
+  fetch-and-return. Still not implemented; only do it if a live run shows the
+  fetch actually blocked. The same correction was applied to the README's
+  "where your data can and cannot go" section, which had inherited the same
+  wrong reasoning.
+- **`use_dynamic_url: true`** on the web-accessible-resources entry, so a stable
+  extension id cannot be probed from an x.com page to fingerprint that Surtr is
+  installed. Verified against a control run that the flag both takes effect and
+  leaves the dynamic `import()`s working — table under KEY FACTS.
+- **Dropped `unlimitedStorage` and `downloads`.** Exports now use a blob URL and
+  a synthetic anchor click from the panel. Verified in a headless browser that
+  `chrome.downloads` is genuinely gone from the panel's API surface and that
+  both files still land, with the CSV correctly quoting a field containing a
+  comma and quotes. README permission table is down to two rows.
+- Machine-level sweep tooling gained case-sensitive rule prefixes, a
+  value-shaped `auth_token` rule, hard-fail on empty rule values, and a test
+  harness. See Tooling above.
+
+Still not run against a live account. That remains job one.

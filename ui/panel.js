@@ -278,12 +278,26 @@ function stamp() {
   return new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 }
 
+/**
+ * Save a file from the panel.
+ *
+ * A blob URL plus a synthetic anchor click, NOT chrome.downloads. The panel is
+ * an ordinary extension page, so `<a download>` works here with no permission
+ * at all - and asking for `downloads` would mean asking for the ability to
+ * write files the user never requested, to justify saving a file the user just
+ * clicked a button to save. The smaller permission set is the point.
+ */
 function download(text, mime, filename) {
   const url = URL.createObjectURL(new Blob([text], { type: mime }));
-  chrome.downloads.download({ url, filename, saveAs: true }, () => {
-    // Revoke late: Chrome needs the blob alive until the download starts.
-    setTimeout(() => URL.revokeObjectURL(url), 60000);
-  });
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.style.display = 'none';
+  document.body.append(a);
+  a.click();
+  a.remove();
+  // Revoke late: the browser needs the blob alive until the save has started.
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
 function toCsv(rows) {

@@ -22,17 +22,30 @@ trust. The only honest way to earn it is to be small enough to read. So:
 
 ### Every permission, and why
 
+**Surtr requests exactly two permissions.** Both are listed here in full.
+
 | Permission | Why it is here | What it would mean if it were missing |
 |---|---|---|
 | `storage` | Filter settings, the scan checkpoint, discovered query ids, and the results table. Everything durable lives here because MV3 kills the service worker at will. | Closing the tab mid-scan would lose the run. |
-| `unlimitedStorage` | A full history scan with text previews runs past the 5 MB default quota. | Long scans would fail partway with a quota error. |
 | `sidePanel` | The UI is a side panel so it can sit next to x.com while a scan runs. | The UI would have to be a popup, which closes the moment you click away — and closing it must not stop a scan. |
-| `downloads` | Exporting the matched set as JSON and CSV before anything is ever deleted. | You would have no record of what the tool was about to act on. |
-| `host_permissions: https://x.com/*` | The whole job. The content script runs in x.com's origin so the browser attaches your session cookie itself. | Nothing would work. |
 
-**Not requested, deliberately:** `tabs` (the relay finds an x.com tab using the
-host permission alone), `cookies` (see below), `scripting`, `webRequest`,
-`<all_urls>`, and any host permission other than x.com.
+Separately, one host permission — `https://x.com/*`, and nothing else. That is
+the job itself: the content script runs in x.com's origin, which is what lets
+the browser attach your session cookie without Surtr ever handling it.
+
+**Not requested, deliberately:**
+
+- `downloads` — exports use a blob URL and an anchor click from the panel, which
+  needs no permission. Asking for the ability to write files the user never
+  requested, in order to save a file the user just clicked a button to save, is
+  a bad trade.
+- `unlimitedStorage` — X's timeline stops at roughly 3,200 entries (see below),
+  which is comfortably inside the default quota. The permission was in an early
+  draft for archive-scale lists and is not needed for the scope that shipped.
+- `tabs` — the relay finds an x.com tab using the host permission alone.
+- `cookies` — see the section above; the only cookie Surtr reads is `ct0`, from
+  `document.cookie` in the page's own origin.
+- `scripting`, `webRequest`, `<all_urls>`, and any host beyond x.com.
 
 ### Surtr never handles your credentials
 
@@ -57,13 +70,16 @@ refuses to be in a position where it could leak one.
   `connect-src 'self' https://x.com` in the manifest means the extension's own
   pages structurally cannot open a connection to any other host. There is no
   analytics endpoint they could reach even if one were added.
-- **The content script is constrained by host permissions**, not by that CSP —
-  content scripts run in the page's world and MV3's `extension_pages` policy
-  does not cover them. Surtr holds exactly one host permission, `https://x.com/*`,
-  so it cannot make a *readable* cross-origin request anywhere else. Being
-  precise, though: any script in any page can fire a `no-cors` request whose
-  response it cannot read, so "impossible" is an overclaim, and this README will
-  not make it. What is actually true is the thing you can check:
+- **The content script has no special reach of its own.** It is not covered by
+  that CSP — content scripts run in the page's world, and MV3's
+  `extension_pages` policy does not apply to them. It does not get extra reach
+  from the host permission either: under Manifest V3 a content script follows
+  the **host page's** CORS policy and does *not* inherit the extension's host
+  permissions. (That bypass existed under MV2 and was deliberately removed.) So
+  its network reach is an ordinary x.com script's reach, no more. Being precise,
+  that is still not "impossible": any script in any page can fire a `no-cors`
+  request whose response it cannot read, so this README will not claim
+  otherwise. What is actually true is the thing you can check:
   **there are exactly two `fetch` call sites in this repo.** One, in
   `lib/api.js`, only ever builds `https://x.com/i/api/graphql/...` URLs. The
   other, in `lib/discovery.js`, re-fetches an X JavaScript bundle the page has
