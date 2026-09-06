@@ -99,17 +99,42 @@ function setStatus(el, ok, text) {
   el.className = ok === null ? 'pending' : ok ? 'ok' : 'bad';
 }
 
+/**
+ * Connection rows.
+ *
+ * The distinction this renders is the important one: a query id found in X's
+ * bundle is NOT evidence that the site still serves that operation. X retired
+ * UserTweetsAndReplies while its id was still sitting in the bundle, so a panel
+ * that says "discovered" off a bundle hit is lying by omission. Nothing here
+ * claims more than it knows - "in bundle" until a request comes back, and only
+ * then "confirmed live".
+ */
 function renderDiscovery(d) {
   if (!d) {
     setStatus($('st-bearer'), null, 'not discovered');
-    setStatus($('st-q1'), null, 'not discovered');
-    setStatus($('st-q2'), null, 'not discovered');
+    setStatus($('st-q1'), null, 'not found');
+    setStatus($('st-q2'), null, 'not found');
+    setStatus($('st-alt'), null, '—');
     return;
   }
   setStatus($('st-bearer'), Boolean(d.bearer), d.bearer ? 'present' : 'MISSING');
+
   const q = d.queryIds || {};
   setStatus($('st-q1'), Boolean(q.UserByScreenName), q.UserByScreenName || 'MISSING');
-  setStatus($('st-q2'), Boolean(q.UserTweetsAndReplies), q.UserTweetsAndReplies || 'MISSING');
+
+  const sel = d.selectedTimeline || null;
+  if (!sel) {
+    setStatus($('st-q2'), false, 'NONE FOUND');
+  } else {
+    const live = d.confirmedLive === sel;
+    setStatus($('st-q2'), true, sel + (live ? '  [confirmed live]' : '  [in bundle]'));
+  }
+
+  // Every other candidate the bundle also carries. When X renames things again,
+  // this row is where you see it first.
+  const others = (d.timelineFound || []).filter((n) => n !== sel);
+  setStatus($('st-alt'), null, others.length ? others.join(', ') : '—');
+
   if (d.missing && d.missing.length > 0) $('manual-wrap').open = true;
 }
 
@@ -329,11 +354,12 @@ $('btn-rediscover').addEventListener('click', async () => {
 });
 
 $('btn-manual').addEventListener('click', async () => {
+  const op = $('m-op').value.trim() || 'UserOriginalsTimeline';
   const values = {
     bearer: $('m-bearer').value.trim(),
     queryIds: {
       UserByScreenName: $('m-q1').value.trim(),
-      UserTweetsAndReplies: $('m-q2').value.trim(),
+      [op]: $('m-q2').value.trim(),
     },
   };
   await send({ type: 'SURTR_MANUAL', values });

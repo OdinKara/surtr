@@ -56,7 +56,11 @@ scanner is validated. That is the whole point of the phase split.
    them into constants in the code.
 5. **Establish whether the account actually hits the ~3,200 ceiling.** The
    `endReason` and `ceilingSuspected` fields on the finished job say which.
-6. Only then: consider phase 2.
+6. **Answer the retweet question** before touching `enumerate.js` parsing:
+   does `UserOriginalsTimeline` include retweets, is there a retweet-specific
+   operation, and is `UserRepliesTimeline` needed at all given replies are out
+   of scope. Needs a bundle dump from a logged-in session — see KEY FACTS.
+7. Only then: consider phase 2.
 
 ---
 
@@ -209,6 +213,55 @@ true claim plus the check that actually settles it — two `fetch` call sites,
 one building only `https://x.com/i/api/graphql/...` URLs and one re-reading an
 already-loaded `abs.twimg.com` bundle, both verifiable by grep. Overclaiming in
 a security README is worse than the nuance.
+
+### X split the profile timeline. UserTweetsAndReplies is dead.
+
+A live capture of a logged-in profile page (364 requests, all 200) showed:
+
+| operation | seen | note |
+|---|---|---|
+| `UserByScreenName` | yes, 1.3 kB | our discovered queryId works; auth stack proven |
+| `UserOriginalsTimeline` | yes, 8.9 kB on load then ~5 kB per scroll | Posts tab + pagination |
+| `UserRepliesTimeline` | yes, 21.9 kB | Replies tab |
+| `UserTweetsAndReplies` | **ABSENT in all 364** | dead operation name |
+
+So the single profile timeline is now at least two tab-scoped operations.
+`lib/discovery.js` resolves a prioritised candidate list —
+`UserOriginalsTimeline`, `UserRepliesTimeline`, `UserTweets`,
+`UserTweetsAndReplies`, `UserMedia` — selects the first present, and reports
+both the selection and every other candidate found. The operation name is
+passed into `walkTimeline()`; nothing hardcodes it.
+
+**PRESENCE IN THE BUNDLE IS NOT PROOF THE SITE SERVES IT.** That is the real
+lesson here, and it now shapes the UI: `UserTweetsAndReplies` kept working as a
+*discovery* result long after X stopped serving it, because its query id was
+still sitting in the JavaScript. The panel therefore shows an operation as
+**"in bundle"** until a request against it actually returns, and only then
+**"confirmed live"** — set by the executor after the first successful page. A
+row that says "discovered" off a bundle hit is lying by omission.
+
+### OPEN: does UserOriginalsTimeline carry retweets?
+
+**Unresolved, and deliberately not guessed at.** Scope is posts + retweets. The
+name suggests originals only, but X's Posts tab visibly renders retweets, so
+the name is not evidence either way. Until it is answered from a real bundle
+dump plus a real response:
+
+- `lib/enumerate.js` parsing is UNCHANGED on purpose.
+- Whether enumeration has to merge two or three streams is undecided.
+
+Answering it needs the logged-in bundle. The logged-out shell now serves an
+`x-web/…/entry-client-*.js` family that contains **no GraphQL operation table
+at all** (verified: `operationName` and `queryId` occur zero times across the
+entry bundle and sampled chunks), and the old `responsive-web/client-web/*`
+paths 404 unauthenticated. So the dump can only come from a logged-in browser.
+
+Related risk this turned up: `discovery.js` prioritises bundle filenames
+matching `/(api|main)\.[0-9a-f]+\.js/`. The newer `x-web` naming
+(`entry-client-logged-out-DJ1gyf49.js`) does not match that shape. It still
+falls back to scanning all candidates, but if the logged-in app has also moved
+to the new naming, the priority ordering is now useless rather than helpful.
+Confirm against a live bundle list before relying on it.
 
 ### Response shapes to re-check against live data
 
@@ -441,5 +494,21 @@ export path was re-run unchanged and still passes.
 **The earlier "verified working" for this flag was wrong**, and it is corrected
 in place under KEY FACTS rather than quietly dropped: that test only imported
 the two leaf modules, so it could not have caught this.
+
+Still not run against a live account.
+
+### 2026-09-06 — Operation rename: timeline candidates, and honest status rows
+
+A live capture proved `UserTweetsAndReplies` is gone and the profile timeline
+is now tab-scoped. Discovery resolves a prioritised candidate list, selects the
+first one present, reports the rest, and passes the chosen name into
+`walkTimeline()`. The panel distinguishes "in bundle" from "confirmed live",
+because the whole reason this went unnoticed is that a retired operation's
+query id stayed in the JavaScript and discovery kept calling that a success.
+
+`lib/enumerate.js` parsing is untouched, pending the retweet answer. Only its
+call site is parameterised. The bundle dump needed to answer that question
+cannot be produced without a logged-in session — the logged-out shell carries
+no operation table at all.
 
 Still not run against a live account.

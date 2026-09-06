@@ -24,9 +24,15 @@
   <dl class="status">
     <dt>x.com tab</dt><dd id="st-tab" class="pending">not checked</dd>
     <dt>Bearer token</dt><dd id="st-bearer" class="pending">not discovered</dd>
-    <dt>UserByScreenName</dt><dd id="st-q1" class="pending">not discovered</dd>
-    <dt>UserTweetsAndReplies</dt><dd id="st-q2" class="pending">not discovered</dd>
+    <dt>UserByScreenName</dt><dd id="st-q1" class="pending">not found</dd>
+    <dt>Timeline op</dt><dd id="st-q2" class="pending">not found</dd>
+    <dt>Also in bundle</dt><dd id="st-alt" class="pending">&mdash;</dd>
   </dl>
+  <p class="hint">
+    "in bundle" means the query id was found in X's JavaScript, which is NOT
+    proof the site still serves that operation. Only a request that comes back
+    upgrades it to "confirmed live".
+  </p>
   <div class="row">
     <button id="btn-discover" type="button">Discover</button>
     <button id="btn-rediscover" type="button" class="ghost">Force rediscover</button>
@@ -45,7 +51,10 @@
     <label>UserByScreenName queryId
       <input id="m-q1" type="text" spellcheck="false">
     </label>
-    <label>UserTweetsAndReplies queryId
+    <label>Timeline operation name
+      <input id="m-op" type="text" spellcheck="false" placeholder="UserOriginalsTimeline">
+    </label>
+    <label>Timeline queryId
       <input id="m-q2" type="text" spellcheck="false">
     </label>
     <button id="btn-manual" type="button" class="ghost">Apply override</button>

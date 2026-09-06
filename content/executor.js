@@ -91,7 +91,7 @@
   /* ---------------------------------------------------------------- scan --- */
 
   async function doScan(config) {
-    const { store, api, enumerate, filters } = await ready;
+    const { store, api, discovery, enumerate, filters } = await ready;
 
     if (running) return { ok: false, error: 'A scan is already running.' };
     running = true;
@@ -145,6 +145,8 @@
         screenName: who.screenName,
         bearer: record.bearer,
         queryIds: record.queryIds,
+        // Chosen by discovery from TIMELINE_CANDIDATES, never hardcoded.
+        operationName: record.selectedTimeline,
         startCursor: resuming ? job.cursor : null,
         seenCursors: resuming ? job.seenCursors || [] : [],
         onLog,
@@ -165,6 +167,10 @@
           job.seenCursors = state.seenCursors;
           await store.set(store.KEY.RATE, state.rate);
           await store.checkpoint(job, all);
+          // First page back means the operation is not just present in the
+          // bundle, it is actually served. Only this upgrades the panel from
+          // "in bundle" to "confirmed live".
+          if (state.pages === 1) await discovery.markConfirmedLive(record.selectedTimeline);
         },
       });
 
@@ -231,6 +237,9 @@
               // needs to know whether we have one.
               hasBearer: Boolean(record.bearer),
               queryIds: record.queryIds,
+              selectedTimeline: record.selectedTimeline,
+              timelineFound: record.timelineFound,
+              confirmedLive: record.confirmedLive,
               missing: record.missing,
               manual: Boolean(record.manual),
               bundle: record.bundleUrl,
