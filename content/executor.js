@@ -42,9 +42,10 @@
   // file rather than the dependency that actually failed, which is a genuinely
   // misleading error to debug. See DEV.md.
   const ready = (async () => {
-    const [store, filters, discovery, api, enumerate] = await Promise.all([
+    const [store, filters, streams, discovery, api, enumerate] = await Promise.all([
       import(LIB('store.js')),
       import(LIB('filters.js')),
+      import(LIB('streams.js')),
       import(LIB('discovery.js')),
       import(LIB('api.js')),
       import(LIB('enumerate.js')),
@@ -52,7 +53,8 @@
     discovery.provide({ store });
     api.provide({ store });
     enumerate.provide({ api });
-    return { store, discovery, api, enumerate, filters };
+    // streams.js and filters.js are pure - nothing to inject.
+    return { store, discovery, api, enumerate, filters, streams };
   })();
 
   /** Set by SURTR_STOP, polled by the walk between pages and between requests. */
@@ -91,7 +93,7 @@
   /* ---------------------------------------------------------------- scan --- */
 
   async function doScan(config) {
-    const { store, api, discovery, enumerate, filters } = await ready;
+    const { store, api, discovery, enumerate, filters, streams } = await ready;
 
     if (running) return { ok: false, error: 'A scan is already running.' };
     running = true;
@@ -116,114 +118,188 @@
         shouldAbort,
       });
 
-      // Resume from a checkpoint if one is sitting there, otherwise start clean.
+      // --- plan the run ---------------------------------------------------
+      // Sequential, posts first. Sequential so rate-limit behaviour stays
+      // attributable to one operation at a time; posts first because it is the
+      // larger set and the one whose parse is validated, so an interrupted run
+      // keeps the more valuable half.
       const prior = await store.readJob();
+      const priorResults = await store.readResults();
       const resuming =
-        prior.status === store.JOB_RUNNING && prior.cursor && (await store.readResults()).length > 0;
+        prior.status === store.JOB_RUNNING &&
+        Array.isArray(prior.streams) &&
+        prior.streams.some((x) => x.status === streams.STATUS.RUNNING ||
+                                  x.status === streams.STATUS.PENDING) &&
+        priorResults.length > 0;
 
-      let all = resuming ? await store.readResults() : [];
+      const all = resuming ? priorResults : [];
       const job = resuming
-        ? { ...prior, status: store.JOB_RUNNING, error: null, endReason: null }
+        ? { ...prior, status: store.JOB_RUNNING, error: null }
         : {
             ...store.emptyJob(),
             status: store.JOB_RUNNING,
             startedAt: new Date().toISOString(),
+            streams: streams.planStreams({ config, timelines: record.timelines }),
           };
+
+      // Ownership of every id, so a cross-stream collision is detectable.
+      // Rebuilt from the results on resume - it has to survive a reload.
+      const idOwner = streams.ownerMapFrom(all);
+      job.crossStreamDuplicates = job.crossStreamDuplicates || 0;
+      job.crossStreamDuplicateIds = job.crossStreamDuplicateIds || [];
       await store.checkpoint(job, all);
 
       if (resuming) {
-        await store.log(
-          'info',
-          'resuming from checkpoint: ' + all.length + ' posts already enumerated'
-        );
+        await store.log('info', 'resuming from checkpoint: ' + all.length +
+          ' item(s) already enumerated; finished streams are not redone');
       }
 
-      // RETWEETS ARE NOT IN THIS RUN. UserOriginalsTimeline is posts-only
-      // (confirmed live), and retweets live in a separate reposts stream that
-      // enumeration does not walk yet. Say so loudly rather than quietly
-      // returning a result set that looks complete and is not.
-      const repostsOp = record.timelines.reposts.selected;
-      await store.log(
-        'warn',
-        'RETWEETS NOT INCLUDED: this build walks the posts stream only (' +
-        record.timelines.posts.selected + '). ' +
-        (repostsOp
-          ? 'The reposts stream (' + repostsOp + ') resolved but multi-stream ' +
-            'enumeration is not implemented yet.'
-          : 'No reposts operation resolved from the bundle either.') +
-        ' Treat this run as posts and replies only.'
-      );
+      for (const st of job.streams) {
+        if (st.status === streams.STATUS.SKIPPED) {
+          await store.log('warn',
+            st.label.toUpperCase() + ' STREAM SKIPPED: the kind filter excludes it, so it ' +
+            'was not walked at all. Nothing from it is in these results.');
+        } else if (st.status === streams.STATUS.FAILED) {
+          await store.log('error', st.error);
+        }
+      }
 
-      const seenIds = new Set(all.map((p) => p.id));
+      // --- walk each stream in turn ---------------------------------------
+      let fatal = null;
 
-      const outcome = await enumerate.walkTimeline({
-        userId: who.userId,
-        screenName: who.screenName,
-        bearer: record.bearer,
-        queryIds: record.queryIds,
-        // Chosen by discovery from that stream's candidate list, never
-        // hardcoded. ONLY the posts stream is walked for now - see the warning
-        // logged above; multi-stream merging is not implemented yet.
-        operationName: record.timelines.posts.selected,
-        startCursor: resuming ? job.cursor : null,
-        seenCursors: resuming ? job.seenCursors || [] : [],
-        onLog,
-        shouldAbort,
-        // THE CHECKPOINT. Every page, without exception.
-        onPage: async (posts, state) => {
-          for (const p of posts) {
-            if (seenIds.has(p.id)) continue;
-            seenIds.add(p.id);
-            all.push(p);
-          }
-          const { matched, excluded } = filters.partition(all, config);
-          job.enumerated = all.length;
-          job.matched = matched.length;
-          job.excluded = excluded.length;
-          job.pages = state.pages;
-          job.cursor = state.cursor;
-          job.seenCursors = state.seenCursors;
-          job.rejected = state.rejected;
-          job.reportedTotal = state.reportedTotal;
-          await store.set(store.KEY.RATE, state.rate);
-          await store.checkpoint(job, all);
-          // First page back means the operation is not just present in the
-          // bundle, it is actually served. Only this upgrades the panel from
-          // "in bundle" to "confirmed live".
-          if (state.pages === 1) {
-            await discovery.markConfirmedLive('posts', record.timelines.posts.selected);
-          }
-        },
-      });
+      for (const st of job.streams) {
+        if (st.status === streams.STATUS.DONE ||
+            st.status === streams.STATUS.SKIPPED ||
+            st.status === streams.STATUS.FAILED) {
+          continue;                     // already settled, or never runnable
+        }
+        if (abortRequested) break;
 
-      const { matched, excluded } = filters.partition(all, config);
-      job.status = abortRequested ? store.JOB_IDLE : store.JOB_DONE;
+        st.status = streams.STATUS.RUNNING;
+        job.currentStream = st.key;
+        await store.checkpoint(job, all);
+        await store.log('info', 'stream ' + (job.streams.indexOf(st) + 1) + ' of ' +
+          job.streams.length + ': ' + st.label + ' (' + st.op + ')');
+
+        try {
+          const outcome = await enumerate.walkTimeline({
+            userId: who.userId,
+            screenName: who.screenName,
+            bearer: record.bearer,
+            queryIds: record.queryIds,
+            operationName: st.op,
+            startCursor: st.cursor,
+            seenCursors: st.seenCursors || [],
+            onLog,
+            shouldAbort,
+            // THE CHECKPOINT. Every page, without exception, writing the whole
+            // streams array so a reload resumes mid-stream.
+            onPage: async (posts, state) => {
+              const merged = streams.mergePage({ all, idOwner, posts, streamKey: st.key });
+
+              if (merged.crossStream.length > 0) {
+                // NOT hygiene. These streams are tab-scoped and should be
+                // disjoint, so a collision means our model of the operations is
+                // wrong. Deduped for correctness, then reported loudly.
+                job.crossStreamDuplicates += merged.crossStream.length;
+                job.crossStreamDuplicateIds =
+                  job.crossStreamDuplicateIds.concat(merged.crossStream).slice(0, 200);
+                await store.log('warn',
+                  'CROSS-STREAM DUPLICATE: ' + merged.crossStream.length + ' id(s) arrived ' +
+                  'from ' + st.label + ' that another stream already produced - ' +
+                  merged.crossStream.join(', ') + '. These streams should be disjoint, so ' +
+                  'this is a finding worth reporting, not noise.');
+              }
+
+              st.pages = state.pages;
+              st.cursor = state.cursor;
+              st.seenCursors = state.seenCursors;
+              st.enumerated += merged.added;
+              st.rate = state.rate;          // this operation's own numbers only
+              st.reportedTotal = state.reportedTotal;
+              st.rejected = state.rejected;
+
+              const partition = filters.partition(all, config);
+              job.enumerated = all.length;
+              job.matched = partition.matched.length;
+              job.excluded = partition.excluded.length;
+              job.pages = streams.pagesBreakdown(job.streams).total;
+              await store.checkpoint(job, all);
+
+              if (state.pages === 1) await discovery.markConfirmedLive(st.key, st.op);
+            },
+          });
+
+          st.endReason = outcome.endReason;
+          // Ceiling detection is PER STREAM. A run can hit X's limit on posts
+          // and end on genuine cursor exhaustion on reposts; collapsing those
+          // into one verdict would be a claim about the other stream that was
+          // never measured.
+          st.ceilingSuspected = outcome.ceilingSuspected;
+          st.status = abortRequested ? streams.STATUS.PENDING : streams.STATUS.DONE;
+          if (st.status === streams.STATUS.DONE) st.cursor = null;
+        } catch (e) {
+          const msg = String(e && e.message ? e.message : e);
+          st.status = streams.STATUS.FAILED;
+          st.error = msg;
+          st.endReason = 'error';
+          await store.log('error', st.label + ' stream failed: ' + msg);
+          // 401/403 are fatal for the WHOLE run - retrying an auth failure on
+          // another stream is how an account gets flagged. Everything already
+          // enumerated is still kept.
+          if (e && e.name === 'AuthError') { fatal = e; break; }
+        }
+
+        st.termination = streams.streamReport(st, enumerate.CEILING_HINT);
+        await store.checkpoint(job, all);
+      }
+
+      // --- finish ----------------------------------------------------------
+      job.currentStream = null;
+      for (const st of job.streams) {
+        if (!st.termination) st.termination = streams.streamReport(st, enumerate.CEILING_HINT);
+      }
+
+      const partition = filters.partition(all, config);
       job.finishedAt = new Date().toISOString();
       job.enumerated = all.length;
-      job.matched = matched.length;
-      job.excluded = excluded.length;
-      job.endReason = outcome.endReason;
-      job.ceilingSuspected = outcome.ceilingSuspected;
-      job.termination = enumerate.terminationReport({
-        total: all.length,
-        endReason: outcome.endReason,
-        ceilingSuspected: outcome.ceilingSuspected,
-      });
-      // Do not carry a cursor into a finished run, or the next scan would
-      // "resume" from the end and report zero.
-      if (!abortRequested) job.cursor = null;
+      job.matched = partition.matched.length;
+      job.excluded = partition.excluded.length;
+      job.pages = streams.pagesBreakdown(job.streams).total;
+      job.rates = api.allRates();
+
+      if (abortRequested) {
+        job.status = store.JOB_IDLE;
+      } else {
+        const overall = streams.overallStatus(job.streams);
+        job.status = overall === 'done' ? store.JOB_DONE
+          : overall === 'partial' ? store.JOB_PARTIAL
+          : store.JOB_ERROR;
+      }
+      if (fatal) job.error = fatal.message;
       await store.checkpoint(job, all);
 
-      const r = api.rateSnapshot();
-      await store.log(
-        'info',
-        'observed rate limits: limit=' + (r.limit ?? 'not reported') +
-        ', lowest remaining seen=' + (r.observedMinRemaining ?? 'n/a') +
-        ', 429s=' + r.observed429s
-      );
-      await store.log(abortRequested ? 'warn' : 'ok', job.termination);
+      for (const st of job.streams) {
+        await store.log(
+          st.status === streams.STATUS.FAILED ? 'error'
+            : st.status === streams.STATUS.SKIPPED ? 'warn' : 'ok',
+          st.termination);
+      }
+      if (job.crossStreamDuplicates > 0) {
+        await store.log('warn', 'CROSS-STREAM DUPLICATES: ' + job.crossStreamDuplicates +
+          ' total. These streams are meant to be disjoint - investigate.');
+      }
 
-      return { ok: true, enumerated: all.length, matched: matched.length };
+      // Rate observations are reported PER OPERATION and never combined.
+      for (const st of job.streams) {
+        if (!st.rate) continue;
+        await store.log('info', 'observed rate limits for ' + st.op +
+          ': limit=' + (st.rate.limit ?? 'not reported') +
+          ', lowest remaining seen=' + (st.rate.observedMinRemaining ?? 'n/a') +
+          ', 429s=' + st.rate.observed429s + ', requests=' + st.rate.requests);
+      }
+
+      return { ok: true, enumerated: all.length, matched: partition.matched.length };
     } catch (e) {
       const { store } = await ready;
       const job = await store.readJob();

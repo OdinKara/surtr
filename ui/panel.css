@@ -226,6 +226,25 @@ button.ghost { background: transparent; }
   word-break: break-word;
 }
 
+
+/* A stream that was skipped, or a cross-stream duplicate, has to be visible at
+ * a glance - not something you only find by opening the exported file. Same
+ * weight as any other reason a run is incomplete. */
+.banner {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border-left: 3px solid var(--warn);
+  background: var(--surface-2);
+  border-radius: 0 8px 8px 0;
+  color: var(--warn);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.banner.bad { border-left-color: var(--bad); color: var(--bad); }
+#stream-reports .termination { margin-top: 8px; }
+#stream-reports .termination.failed { border-left-color: var(--bad); }
+#stream-reports .termination.skipped { border-left-color: var(--muted); }
+
 /* -------------------------------------------------------------- results */
 
 .tablewrap { max-height: 320px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }

@@ -267,10 +267,7 @@ it does not just say a timeline is absent.
 Note the naming trap again: **"Originals" means not-retweets, NOT not-replies.**
 UserOriginalsTimeline does return replies. Kind is classified per entry.
 
-**Multi-stream enumeration is NOT implemented yet** - the shape is proposed
-below and awaiting approval. Until then a scan walks the posts stream only and
-logs a loud warning that retweets are not included, rather than returning a
-result set that looks complete and is not.
+Multi-stream enumeration is BUILT - see below.
 
 ### CLOSED: no bundle dump needed
 
@@ -282,67 +279,87 @@ which carries no GraphQL operation table at all. So `discovery.js`'s
 that matters, and the earlier concern about it is closed. No bundle dump is
 required.
 
-### PROPOSED (not implemented): two-stream enumeration
+### Two-stream enumeration (BUILT)
 
-Awaiting approval. Do not build before it is approved.
+Approved and implemented. `lib/streams.js` holds the planning and merge logic as
+pure functions - it is a LEAF like everything under `lib/` - so the part that has
+to be right (never enumerating an id twice, and noticing when it happens) is
+testable without a browser. `tests/streams.test.mjs`, 33 assertions.
 
-**Order and concurrency.** Sequential, posts first, then reposts. Sequential so
-rate-limit behaviour stays observable and attributable to one operation at a
-time - two concurrent streams would make a 429 impossible to attribute, and the
-observed ceiling is the thing this tool is supposed to be learning. Posts first
-because it is the larger set, it is the stream whose parse has been validated
-against a real body, and if a run is interrupted the user keeps the more
-valuable half.
+**Order.** Sequential, posts first. Sequential so rate-limit behaviour stays
+attributable to one operation at a time; two concurrent streams would make a 429
+impossible to attribute, and the observed ceiling is a thing this tool exists to
+learn. Posts first because it is the larger set and the one whose parse is
+validated against a real body, so an interrupted run keeps the more valuable
+half.
 
-**Job state.** `job.streams` is an array, one entry per stream:
+**Skipping.** A stream whose kinds are all excluded by the filter is not walked
+at all - `status: 'skipped'`, `endReason: 'skipped-by-filter'`. The rule is
+symmetric: it applies to posts as well as reposts, because walking a stream
+whose every entry is about to be filtered out is the same waste either way.
+A skipped stream is surfaced as a PANEL BANNER at the same prominence as any
+other reason a run is incomplete, and in the export's streams block. A scan that
+quietly did less work than the user assumed is the same failure as an export
+that reads as complete and is not.
+
+An unresolved operation is `failed` / `no-operation`, never `skipped`. Those are
+different problems and must not read the same.
+
+**Counters.** `enumerated` / `matched` / `excluded` are cumulative across
+streams because they describe one result set. `pages` is cumulative too, with
+the per-stream breakdown on its own line, so a single number never jumps or
+needs explaining:
 
 ```
-{ key: 'posts', op, status: 'pending'|'running'|'done'|'failed',
-  pages, cursor, seenCursors, endReason, error }
+stream 2 of 2 · reposts · UserRepostsTimeline · running   |   pages 7 (posts 4, reposts 3)
 ```
 
-`job.results` stays a SINGLE union list, not per-stream. Deduplication is by id
-across both streams (a post appearing in both is one item), and the `seenIds`
-set is rebuilt from the union on resume.
+**Cross-stream duplicates are a DEFECT SIGNAL, not hygiene.** The streams are
+tab-scoped and should be disjoint - a post cannot be a repost - so an id
+arriving from both means our model of X's operations is wrong. The merge
+dedupes (correctness first: the id appears once in the results, and the FIRST
+stream to produce it keeps ownership), then counts the collisions, records the
+ids, logs them, and shows them in the panel and the export. If that count is
+ever non-zero it is a finding worth chasing. A silent dedupe would have hidden
+exactly the evidence that something needs looking at.
 
-**Counters.** `enumerated` / `matched` / `excluded` stay cumulative across both
-streams, because they describe one result set. `pages` also stays cumulative,
-with the breakdown on a detail line so a jumping or resetting number never has
-to be explained:
+Ordinary within-stream repeats are counted separately and are not a defect.
 
-```
-stream 2 of 2 - reposts - UserRepostsTimeline - running
-pages 7 (posts 4, reposts 3)
-```
+**Termination is PER STREAM, never collapsed.** Each stream ends for its own
+reason, and the ~3,200 ceiling check runs per stream. A run can hit the ceiling
+on posts and end on genuine cursor exhaustion on reposts; picking one of those
+to report would be a claim about the other stream that was never measured. The
+panel renders one report per stream and the export carries `endReason` and
+`ceilingSuspected` per stream.
 
-**Partial failure.** If posts succeeds and reposts fails partway, results from
-BOTH are kept - nothing already enumerated is ever discarded. Job status becomes
-`partial`, not `error`. The termination text reports per stream:
+**Partial, not error.** If one stream fails partway, everything already
+enumerated is kept - nothing is ever discarded - the run status becomes
+`partial`, and the failed stream's report says how much it kept before failing.
+Only a run where every stream failed with nothing enumerated is `error`.
+401/403 remain fatal for the whole run: retrying an auth failure on another
+stream is how an account gets flagged.
 
-> posts: complete, 412 items. reposts: FAILED after 2 pages - <error>. The 38
-> reposts captured before the failure are included.
+**Resume.** Pagination state lives per stream. On resume, streams marked `done`
+are skipped entirely - stream A is never redone - and the first
+`pending`/`running` one continues from its own cursor. A finished stream's
+cursor is nulled so it can never "resume from the end" and report zero. The id
+ownership map is rebuilt from the results, so cross-stream collision detection
+survives a reload. Checkpointing stays after every page and writes the whole
+streams array.
 
-Crucially the EXPORT carries a `streams` block with each stream's `endReason`,
-so a partial export cannot be mistaken for a complete one. The export is the
-pre-deletion record; a partial record that looks complete is the same class of
-error as the "in bundle" / "confirmed live" conflation. Auth failures (401/403)
-stay fatal for the whole run.
+**Rate limits are per operation and NEVER merged.** `lib/api.js` keys its
+observations by operation name. Different endpoints carry different budgets, so
+an average or a sum across operations is wrong for both - and since the point of
+hardcoding no requests-per-window figure is to learn the real ceilings, a merged
+number would destroy the measurement it exists to take. The panel meter shows
+the current stream's operation and that operation's own limit/remaining/reset;
+the export records each separately.
 
-**Resume.** On resume the walk skips any stream whose status is `done` - stream
-A is never redone - and continues the first `running`/`pending` one from its own
-cursor. A finished stream's cursor is nulled so it can never "resume from the
-end" and report zero. Checkpointing stays after every page and writes the whole
-`streams` array.
-
-**Rate limits.** Log the observed limit and lowest remaining PER OPERATION at
-each stream's end. They may differ per endpoint, which is exactly why no
-requests-per-window number is hardcoded.
-
-**One open question for the maintainer.** If `includeKinds` excludes retweets, should the
-reposts stream be skipped entirely to save rate budget? It would be faster, but
-it changes what the export means. Recommendation: skip it, and record
-`endReason: 'skipped-by-filter'` in the streams block so the record stays
-unambiguous. Not doing this without a decision.
+**The export carries a `streams` block.** It is the pre-deletion record, so it
+must say what it does NOT contain: which streams ran, which failed, which were
+skipped and never walked, how each terminated, and the cross-stream duplicate
+count. `complete` is true only when every stream is `done`. The CSV cannot carry
+that block, so every CSV row carries `_stream` instead.
 
 ### Confirmed live response shape
 
@@ -693,3 +710,29 @@ Still not run against a live account end to end.
   complete and is not is worse than one that says what it is missing.
 
 Still not run against a live account end to end.
+
+### 2026-09-06 — Two-stream enumeration built
+
+Approved shape implemented, with the three corrections.
+
+- `lib/streams.js` (new, pure, leaf) holds planning and merge; 33 assertions in
+  `tests/streams.test.mjs`.
+- Sequential, posts first. Cumulative counters with a per-stream page
+  breakdown. Partial, not error. Nothing enumerated is ever discarded. Resume
+  skips finished streams with their cursors nulled. 401/403 fatal for the run.
+- **Skipping a stream by filter is surfaced in the PANEL as a banner**, not only
+  in the export. The rule is symmetric across both streams.
+- **Cross-stream duplicates are counted, logged, panelled and exported.** The
+  streams should be disjoint, so a non-zero count is a finding, not noise. The
+  dedupe still happens - correctness first - it just is not silent.
+- **Ceiling detection is per stream**, and termination is reported per stream
+  with no collapsing into a single verdict for the run.
+- **Rate observations are per operation and never merged**, in `lib/api.js`, in
+  the panel meter, and in the export.
+
+Two test assertions I had written were wrong and were corrected rather than the
+code: one assumed the posts stream would not be skipped when only retweets are
+wanted (it is, and should be), and one used too loose a regex to prove a clean
+stream is not tarred with another stream's ceiling verdict.
+
+Ready for a live two-stream dry run. Still not run against a live account.

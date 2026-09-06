@@ -157,31 +157,71 @@ function renderJob(job) {
   const busy = j.status === store.JOB_RUNNING || j.status === store.JOB_STOPPING;
   $('btn-scan').disabled = busy;
   $('btn-stop').disabled = !busy;
+  const resumable = (j.streams || []).some(
+    (s) => s.status === 'pending' || s.status === 'running');
   $('btn-scan').textContent =
     j.status === store.JOB_RUNNING ? 'Scanning...'
-    : j.cursor ? 'Resume dry-run scan'
+    : (resumable && j.enumerated) ? 'Resume dry-run scan'
     : 'Start dry-run scan';
 
-  // What the parser refused. A "FOREIGN AUTHOR" count here is the safety gate
-  // rejecting the who-to-follow module - the guard working, not a fault - and
-  // showing it beats dropping those entries silently.
-  const skipped = $('skipped');
-  const rej = j.rejected && Object.keys(j.rejected).length ? j.rejected : null;
-  if (rej) {
-    skipped.textContent = 'skipped: ' +
-      Object.entries(rej).map(([w, n]) => n + ' x ' + w).join(', ') +
-      (j.reportedTotal ? '  |  X reports ' + j.reportedTotal + ' posts on this account' : '');
-    skipped.hidden = false;
+  // Cumulative pages with the per-stream breakdown, so a single number never
+  // has to be explained and never appears to jump backwards.
+  const active = (j.streams || []).filter((s) => s.status !== 'skipped');
+  const breakdown = active.map((s) => s.label + ' ' + (s.pages || 0)).join(', ');
+  const line = $('stream-line');
+  if (j.streams && j.streams.length) {
+    const cur = (j.streams || []).find((s) => s.key === j.currentStream);
+    const idx = cur ? j.streams.indexOf(cur) + 1 : null;
+    line.textContent =
+      (cur ? 'stream ' + idx + ' of ' + j.streams.length + ' \u00b7 ' + cur.label +
+             ' \u00b7 ' + cur.op + ' \u00b7 running' : 'streams idle') +
+      (breakdown ? '   |   pages ' + (j.pages || 0) + ' (' + breakdown + ')' : '');
+    line.hidden = false;
   } else {
-    skipped.hidden = true;
+    line.hidden = true;
   }
 
-  const term = $('termination');
-  if (j.termination) {
-    term.textContent = j.termination;
-    term.hidden = false;
+  // A SKIPPED STREAM MUST BE VISIBLE AT A GLANCE. Not only in the export.
+  const skippedStreams = (j.streams || []).filter((s) => s.status === 'skipped');
+  const banner = $('stream-skipped');
+  if (skippedStreams.length) {
+    banner.textContent = skippedStreams
+      .map((s) => s.label.toUpperCase() + ' NOT INCLUDED \u2014 stream skipped because the ' +
+                  'kind filter excludes it. It was not walked at all; nothing from it is in ' +
+                  'these results.')
+      .join('  ');
+    banner.hidden = false;
   } else {
-    term.hidden = true;
+    banner.hidden = true;
+  }
+
+  // Cross-stream duplicates are a DEFECT SIGNAL, not hygiene: these streams are
+  // tab-scoped and should be disjoint.
+  const dupes = $('dupes');
+  if (j.crossStreamDuplicates > 0) {
+    dupes.className = 'banner bad';
+    dupes.textContent =
+      'CROSS-STREAM DUPLICATES: ' + j.crossStreamDuplicates + ' id(s) arrived from more ' +
+      'than one stream. These streams are meant to be disjoint, so this means the model ' +
+      'of X\u2019s operations is wrong \u2014 worth investigating. ' +
+      'Ids: ' + (j.crossStreamDuplicateIds || []).slice(0, 10).join(', ') +
+      ((j.crossStreamDuplicateIds || []).length > 10 ? ' \u2026' : '');
+    dupes.hidden = false;
+  } else {
+    dupes.hidden = true;
+  }
+
+  // One report per stream. NEVER collapsed into a single verdict: a run can hit
+  // the ceiling on one stream and end on genuine cursor exhaustion on another.
+  const reports = $('stream-reports');
+  reports.textContent = '';
+  for (const s of j.streams || []) {
+    if (!s.termination) continue;
+    const p = document.createElement('p');
+    p.className = 'termination' +
+      (s.status === 'failed' ? ' failed' : s.status === 'skipped' ? ' skipped' : '');
+    p.textContent = s.termination;
+    reports.append(p);
   }
 
   const err = $('scan-error');
@@ -191,11 +231,47 @@ function renderJob(job) {
   } else {
     err.hidden = true;
   }
+
+  // What the parser refused. A "FOREIGN AUTHOR" count is the safety gate
+  // rejecting the who-to-follow module - the guard working, not a fault.
+  const skipped = $('skipped');
+  const rej = {};
+  for (const s of j.streams || []) {
+    for (const [w, n] of Object.entries(s.rejected || {})) rej[w] = (rej[w] || 0) + n;
+  }
+  const totals = (j.streams || [])
+    .filter((s) => s.reportedTotal)
+    .map((s) => s.label + ': X reports ' + s.reportedTotal);
+  if (Object.keys(rej).length || totals.length) {
+    skipped.textContent =
+      (Object.keys(rej).length
+        ? 'skipped entries: ' + Object.entries(rej).map(([w, n]) => n + ' x ' + w).join(', ')
+        : '') +
+      (totals.length ? '   |   ' + totals.join('   |   ') : '');
+    skipped.hidden = false;
+  } else {
+    skipped.hidden = true;
+  }
 }
 
-function renderRate(r) {
+/**
+ * Rate meter for the CURRENT stream's operation only.
+ *
+ * Deliberately never a combined figure. Different endpoints carry different
+ * budgets, so an average or a sum across operations is wrong for both of them -
+ * and since the tool exists partly to LEARN the real ceilings, a merged number
+ * would destroy the measurement.
+ */
+function renderRate(job) {
   const bar = $('rate-bar');
   const text = $('rate-text');
+  const streams = (job && job.streams) || [];
+  const current =
+    streams.find((s) => s.key === job.currentStream) ||
+    [...streams].reverse().find((s) => s.rate) ||
+    null;
+  const r = current && current.rate;
+
   if (!r || r.remaining === null || r.remaining === undefined) {
     bar.style.width = '0%';
     text.textContent = 'rate limit: not observed yet';
@@ -205,9 +281,10 @@ function renderRate(r) {
   bar.style.width = limit ? Math.max(0, Math.min(100, (r.remaining / limit) * 100)) + '%' : '100%';
   const resetIn = r.reset ? Math.max(0, r.reset - Math.floor(Date.now() / 1000)) : null;
   text.textContent =
-    'rate limit: ' + r.remaining + (limit ? ' / ' + limit : '') + ' remaining' +
+    r.operationName + ': ' + r.remaining + (limit ? ' / ' + limit : '') + ' remaining' +
     (resetIn !== null ? ', resets in ' + resetIn + 's' : '') +
-    (r.observed429s ? ' - ' + r.observed429s + ' x 429 observed' : '');
+    (r.observed429s ? ' - ' + r.observed429s + ' x 429' : '') +
+    (streams.filter((s) => s.rate).length > 1 ? '  (this operation only)' : '');
 }
 
 function preview(text) {
@@ -296,12 +373,11 @@ function renderLog(lines) {
 let lastMatched = [];
 
 async function paint() {
-  const [job, results, cfgSaved, disc, rate, log] = await Promise.all([
+  const [job, results, cfgSaved, disc, log] = await Promise.all([
     store.readJob(),
     store.readResults(),
     store.get(store.KEY.CONFIG),
     store.get(store.KEY.DISCOVERY),
-    store.get(store.KEY.RATE),
     store.get(store.KEY.LOG),
   ]);
   if (cfgSaved && !paint._configApplied) {
@@ -310,7 +386,7 @@ async function paint() {
   }
   renderDiscovery(disc);
   renderJob(job);
-  renderRate(rate);
+  renderRate(job);
   renderLog(log);
   lastMatched = renderResults(results, readConfig());
 }
@@ -349,9 +425,11 @@ function download(text, mime, filename) {
 }
 
 function toCsv(rows) {
+  // `_stream` records which timeline the item came from - the CSV has no room
+  // for the streams block, so at minimum every row says where it originated.
   const cols = [
-    'id', 'kind', 'createdAt', 'likeCount', 'retweetCount', 'replyCount',
-    'hasMedia', 'isPinned', 'sourceTweetId', 'permalink', 'text',
+    'id', 'kind', '_stream', 'createdAt', 'likeCount', 'retweetCount', 'replyCount',
+    'quoteCount', 'hasMedia', 'isPinned', 'sourceTweetId', 'permalink', 'text',
   ];
   const esc = (v) => {
     const s = v === null || v === undefined ? '' : String(v);
@@ -408,14 +486,57 @@ $('btn-reset').addEventListener('click', async () => {
   await paint();
 });
 
-$('btn-json').addEventListener('click', () => {
+/**
+ * The streams block. THE EXPORT IS THE PRE-DELETION RECORD, so it has to say
+ * what it does NOT contain: which streams ran, which failed partway, which were
+ * skipped by the filter and never walked at all, how each one terminated, and
+ * whether any id turned up in more than one stream. A partial export that reads
+ * as complete is the same class of error as a bundle hit that reads as
+ * "discovered".
+ */
+function streamsBlock(job) {
+  const j = job || {};
+  return {
+    complete: (j.streams || []).length > 0 &&
+      (j.streams || []).every((s) => s.status === 'done'),
+    runStatus: j.status || 'unknown',
+    streams: (j.streams || []).map((s) => ({
+      key: s.key,
+      operation: s.op,
+      status: s.status,
+      endReason: s.endReason,
+      ceilingSuspected: Boolean(s.ceilingSuspected),
+      pages: s.pages || 0,
+      enumerated: s.enumerated || 0,
+      error: s.error || null,
+      reportedTotal: s.reportedTotal ?? null,
+      note: s.termination || null,
+      // Kept per operation, never merged: different endpoints, different budgets.
+      rateObserved: s.rate
+        ? {
+            operationName: s.rate.operationName,
+            limit: s.rate.limit,
+            lowestRemainingSeen: s.rate.observedMinRemaining,
+            observed429s: s.rate.observed429s,
+            requests: s.rate.requests,
+          }
+        : null,
+    })),
+    crossStreamDuplicates: j.crossStreamDuplicates || 0,
+    crossStreamDuplicateIds: j.crossStreamDuplicateIds || [],
+  };
+}
+
+$('btn-json').addEventListener('click', async () => {
   if (lastMatched.length === 0) return;
+  const job = await store.readJob();
   const payload = {
     tool: 'Surtr',
     phase: 'dry-run',
     generatedAt: new Date().toISOString(),
     count: lastMatched.length,
     filters: readConfig(),
+    enumeration: streamsBlock(job),
     posts: lastMatched,
   };
   download(JSON.stringify(payload, null, 2), 'application/json',
