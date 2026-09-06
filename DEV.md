@@ -84,6 +84,12 @@ ui/panel.{html,css,js}   side panel
   `credentials: 'include'` lets the browser attach the HttpOnly `auth_token`
   cookie. Surtr therefore never handles a credential. Moving a fetch into the
   panel or the worker breaks that property and is not an acceptable refactor.
+- **Every module under `lib/` is a LEAF.** They do not import each other;
+  `content/executor.js` imports all five and injects dependencies via each
+  module's `provide()`. This is forced by `use_dynamic_url` — see the
+  web-accessible-resources section below. Adding `import './other.js'` to a
+  `lib/` module breaks the extension at load, with an error naming the wrong
+  file.
 - **The service worker holds no state.** MV3 kills it whenever it likes. If a
   module-scope variable in `background.js` starts to matter, it belongs in
   `lib/store.js`.
@@ -135,19 +141,61 @@ that Surtr is installed. X has an active interest in knowing that. The dynamic
 URL swaps the id for a per-session random token, so there is no stable string to
 probe for.
 
-Verified empirically rather than assumed, because the flag interacts with the
-dynamic `import()` the executor depends on. Both variants were loaded headless
-and evaluated inside the content script's isolated world:
+**The flag costs something, and it broke the extension once. Read this before
+touching lib/.**
 
-| | `getURL('lib/store.js')` | `import()` |
-|---|---|---|
-| without the flag | `chrome-extension://<extension id>/lib/store.js` | works |
-| with the flag | `chrome-extension://6abf90b2-58c5-…/lib/store.js` | works |
+A module fetched through a `use_dynamic_url` URL **cannot resolve its own
+static imports.** `chrome.runtime.getURL()` returns the dynamic form, the
+module itself fetches fine (a plain `fetch()` of the same URL returns 200), but
+the module loader fails to fetch the dependency — and reports it against the
+ENTRY file, not the dependency that actually failed:
 
-So `chrome.runtime.getURL()` transparently returns the dynamic form to the
-content script and the import sites need no change. The control run matters as
-much as the test: without it, "the imports still work" would not distinguish
-"the flag is safe" from "the flag did nothing".
+```
+Failed to fetch dynamically imported module:
+chrome-extension://<uuid>/lib/discovery.js
+```
+
+Nothing in that message mentions `store.js`, which is the file that could not
+be resolved. It is a genuinely misleading error.
+
+Measured, both variants loaded headless and driven from the content script's
+isolated world:
+
+| module | dependencies | no flag | `use_dynamic_url` |
+|---|---|---|---|
+| `store.js` | leaf | OK | OK |
+| `filters.js` | leaf | OK | OK |
+| `discovery.js` | `./store.js` | OK | **FAIL** |
+| `api.js` | `./store.js` | OK | **FAIL** |
+| `enumerate.js` | `./api.js` | OK | **FAIL** |
+
+The split is exactly on "has a static import", not on file, path, casing or
+pattern.
+
+**Consequence, and it is now a design rule: every module under `lib/` is a
+LEAF.** None of them import each other. `content/executor.js` imports all five
+and injects the dependencies through each module's `provide()`. If a module
+under `lib/` ever regains an `import './other.js'`, the extension breaks at
+load with the misleading error above.
+
+`ui/panel.js` still imports `../lib/store.js` and `../lib/filters.js`
+statically, and that is fine: the panel is an extension page loading from the
+extension's own static origin, so web-accessible-resource rules and the dynamic
+URL do not apply to it. Both of those modules are leaves anyway.
+
+### How the earlier "verified working" was wrong
+
+The first verification of this flag ran a control and reported green, and the
+build it green-lit was broken at load. It only ever imported `lib/store.js` and
+`lib/filters.js` — **both leaves**. The failing case, a module with a static
+dependency, was never exercised, and `lib/discovery.js` is the first module the
+executor loads that has one.
+
+Worth keeping as a method note rather than just a bug: the control run answered
+"did the flag change the URL?" (yes) and was mistaken for an answer to "does
+everything still load?" A control proves the test is meaningful; it says
+nothing about coverage. Pick the sample that can fail, not the one that is
+convenient — the leaf modules were chosen because they were easy to assert on.
 
 ### README accuracy note
 
@@ -349,5 +397,49 @@ while it was still cheap.
   messages — for absolute machine paths, lab hostnames, LAN addresses,
   environment-variable names, handles and user ids. Nothing of that kind is
   committed.
+
+Still not run against a live account.
+
+### 2026-09-06 — Broken at load, and fixed: lib/ modules are now leaves
+
+Loading the extension failed immediately with
+
+```
+Failed to fetch dynamically imported module:
+chrome-extension://<uuid>/lib/discovery.js
+```
+
+and all four connection rows stuck on "not discovered".
+
+**Cause: a module fetched through a `use_dynamic_url` URL cannot resolve its own
+static imports.** `lib/discovery.js` had `import * as store from './store.js'`.
+Ruled out first, in order: every import specifier in the graph is a sibling
+directly under `lib/` (no nested paths, no bare specifiers); `lib/*.js` covers
+all five flat files; and filename casing on disk matches the code exactly for
+every module, checked against the git index rather than Explorer. So it was
+neither casing nor a pattern gap.
+
+Reproduced headlessly with a control, and the split is clean: the two LEAF
+modules import fine under the flag, all three modules with a static import fail.
+Full table under KEY FACTS.
+
+**Fix, taking the option that keeps fingerprint resistance:** `use_dynamic_url`
+is KEPT. Every `lib/` module became a leaf instead — `discovery.js`, `api.js`
+and `enumerate.js` no longer import anything, and `content/executor.js` imports
+all five and injects dependencies through a new `provide()` on each.
+`enumerate.js` also lost an `import * as store` that nothing in the file used.
+
+Verified by loading the extension both ways and, in the isolated world:
+(a) importing all five modules, (b) running the executor's wiring, and
+(c) actually using an injected dependency across a module boundary —
+`discovery.applyManual()` writing through the injected store and reading back,
+and `enumerate.userIdFromCookie()` calling through the injected api. All pass
+under both variants, the guard on a missing dependency throws as intended, and
+the dynamic URL is still a UUID, so the flag is still doing its job. The panel
+export path was re-run unchanged and still passes.
+
+**The earlier "verified working" for this flag was wrong**, and it is corrected
+in place under KEY FACTS rather than quietly dropped: that test only imported
+the two leaf modules, so it could not have caught this.
 
 Still not run against a live account.

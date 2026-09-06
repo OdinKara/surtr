@@ -33,14 +33,25 @@
 
   // Loaded once, lazily. The listener is registered synchronously below so no
   // message is dropped while these are still in flight.
+  //
+  // EVERY MODULE UNDER lib/ IS A LEAF, and this is the only place the graph is
+  // wired. That is forced, not stylistic: a web-accessible module fetched
+  // through a `use_dynamic_url` URL cannot resolve its own static imports. If
+  // one of them ever regains an `import './other.js'`, the whole graph fails at
+  // load with "Failed to fetch dynamically imported module" naming the ENTRY
+  // file rather than the dependency that actually failed, which is a genuinely
+  // misleading error to debug. See DEV.md.
   const ready = (async () => {
-    const [store, discovery, api, enumerate, filters] = await Promise.all([
+    const [store, filters, discovery, api, enumerate] = await Promise.all([
       import(LIB('store.js')),
+      import(LIB('filters.js')),
       import(LIB('discovery.js')),
       import(LIB('api.js')),
       import(LIB('enumerate.js')),
-      import(LIB('filters.js')),
     ]);
+    discovery.provide({ store });
+    api.provide({ store });
+    enumerate.provide({ api });
     return { store, discovery, api, enumerate, filters };
   })();
 
