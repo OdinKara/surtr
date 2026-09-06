@@ -240,21 +240,109 @@ still sitting in the JavaScript. The panel therefore shows an operation as
 **"confirmed live"** — set by the executor after the first successful page. A
 row that says "discovered" off a bundle hit is lying by omission.
 
-### ANSWERED: UserOriginalsTimeline does NOT carry retweets
+### RESOLVED: retweets live in UserRepostsTimeline
 
-Confirmed from a parsed live response body: `scribeConfig.page` is
-`"profileOriginals"` and `retweeted_status_result` appears **zero times** in
-6,521 lines. Scope is posts + retweets, so a second stream is required.
-`UserRepliesTimeline` is being checked next.
+Three tab-scoped operations, all confirmed live and all 200:
 
-**Multi-stream merging is NOT implemented**, pending confirmation of which
-operation actually carries retweets. Do not build it before that lands.
+| operation | tab | size | contents |
+|---|---|---|---|
+| `UserOriginalsTimeline` | Posts | 8.9 kB | **posts only, no retweets** (`scribeConfig.page` = `"profileOriginals"`, zero `retweeted_status_result` in the full response) |
+| `UserRepostsTimeline` | Reposts | 20.2 kB | **where retweets live** |
+| `UserRepliesTimeline` | Replies | 21.9 kB | out of scope - replies are not enumerated |
 
-Note the trap in the name: **"Originals" means not-retweets, NOT not-replies.**
-UserOriginalsTimeline does return replies - entries carry
-`in_reply_to_screen_name` and a quick_promote_eligibility of `"ReplyTweet"`. So
-kind is classified per entry and never inferred from the operation an entry
-arrived in.
+Scope is posts + retweets, so enumeration needs **two** streams. Discovery
+therefore resolves two operations independently:
+
+```
+posts    UserOriginalsTimeline, UserTweets, UserTweetsAndReplies
+reposts  UserRepostsTimeline, UserRetweetsTimeline
+```
+
+Each is selected, reported and confirmed-live **separately**, because they fail
+separately: "posts resolved, reposts did not" is a completely different problem
+from the reverse, and one collapsed "discovery failed" would say nothing about
+which half X renamed. `missing` names the stream (`reposts timeline operation`),
+it does not just say a timeline is absent.
+
+Note the naming trap again: **"Originals" means not-retweets, NOT not-replies.**
+UserOriginalsTimeline does return replies. Kind is classified per entry.
+
+**Multi-stream enumeration is NOT implemented yet** - the shape is proposed
+below and awaiting approval. Until then a scan walks the posts stream only and
+logs a loud warning that retweets are not included, rather than returning a
+result set that looks complete and is not.
+
+### CLOSED: no bundle dump needed
+
+The logged-in app still serves `main.<hash>.js` - the initiator column on the
+live GraphQL calls reads `main.ae82e9d02d3328b`. The Vite-style
+`entry-client-logged-out-*` naming applies **only to the logged-out shell**,
+which carries no GraphQL operation table at all. So `discovery.js`'s
+`/(api|main)\.[0-9a-f]+\.js/` priority ordering is still correct for the case
+that matters, and the earlier concern about it is closed. No bundle dump is
+required.
+
+### PROPOSED (not implemented): two-stream enumeration
+
+Awaiting approval. Do not build before it is approved.
+
+**Order and concurrency.** Sequential, posts first, then reposts. Sequential so
+rate-limit behaviour stays observable and attributable to one operation at a
+time - two concurrent streams would make a 429 impossible to attribute, and the
+observed ceiling is the thing this tool is supposed to be learning. Posts first
+because it is the larger set, it is the stream whose parse has been validated
+against a real body, and if a run is interrupted the user keeps the more
+valuable half.
+
+**Job state.** `job.streams` is an array, one entry per stream:
+
+```
+{ key: 'posts', op, status: 'pending'|'running'|'done'|'failed',
+  pages, cursor, seenCursors, endReason, error }
+```
+
+`job.results` stays a SINGLE union list, not per-stream. Deduplication is by id
+across both streams (a post appearing in both is one item), and the `seenIds`
+set is rebuilt from the union on resume.
+
+**Counters.** `enumerated` / `matched` / `excluded` stay cumulative across both
+streams, because they describe one result set. `pages` also stays cumulative,
+with the breakdown on a detail line so a jumping or resetting number never has
+to be explained:
+
+```
+stream 2 of 2 - reposts - UserRepostsTimeline - running
+pages 7 (posts 4, reposts 3)
+```
+
+**Partial failure.** If posts succeeds and reposts fails partway, results from
+BOTH are kept - nothing already enumerated is ever discarded. Job status becomes
+`partial`, not `error`. The termination text reports per stream:
+
+> posts: complete, 412 items. reposts: FAILED after 2 pages - <error>. The 38
+> reposts captured before the failure are included.
+
+Crucially the EXPORT carries a `streams` block with each stream's `endReason`,
+so a partial export cannot be mistaken for a complete one. The export is the
+pre-deletion record; a partial record that looks complete is the same class of
+error as the "in bundle" / "confirmed live" conflation. Auth failures (401/403)
+stay fatal for the whole run.
+
+**Resume.** On resume the walk skips any stream whose status is `done` - stream
+A is never redone - and continues the first `running`/`pending` one from its own
+cursor. A finished stream's cursor is nulled so it can never "resume from the
+end" and report zero. Checkpointing stays after every page and writes the whole
+`streams` array.
+
+**Rate limits.** Log the observed limit and lowest remaining PER OPERATION at
+each stream's end. They may differ per endpoint, which is exactly why no
+requests-per-window number is hardcoded.
+
+**One open question for the maintainer.** If `includeKinds` excludes retweets, should the
+reposts stream be skipped entirely to save rate budget? It would be faster, but
+it changes what the export means. Recommendation: skip it, and record
+`endReason: 'skipped-by-filter'` in the streams block so the record stays
+unambiguous. Not doing this without a decision.
 
 ### Confirmed live response shape
 
@@ -306,13 +394,6 @@ output, that the gate fails closed, and that kind classification is per entry.
 Run it with `node tests/parser.test.mjs` - no framework, no npm; the module is
 loaded through a data: URL so a plain `.js` file imports as ESM without a
 package.json. All ids in the fixture are placeholders.
-
-Related risk this turned up: `discovery.js` prioritises bundle filenames
-matching `/(api|main)\.[0-9a-f]+\.js/`. The newer `x-web` naming
-(`entry-client-logged-out-DJ1gyf49.js`) does not match that shape. It still
-falls back to scanning all candidates, but if the logged-in app has also moved
-to the new naming, the priority ordering is now useless rather than helpful.
-Confirm against a live bundle list before relying on it.
 
 ### Response shapes to re-check against live data
 
@@ -585,5 +666,30 @@ progress denominator.
 
 Multi-stream merging deliberately NOT implemented - waiting on confirmation of
 which operation carries retweets.
+
+Still not run against a live account end to end.
+
+### 2026-09-06 — Third operation confirmed; discovery resolves two streams
+
+`UserRepostsTimeline` is where retweets live - a new name we had not seen.
+`UserOriginalsTimeline` is posts-only, `UserRepliesTimeline` is out of scope.
+
+- Discovery now resolves TWO timeline operations from separate candidate lists
+  and reports each independently, including which stream is missing by name.
+  The panel has a row per stream, each with the same in-bundle / confirmed-live
+  distinction.
+- The bundle-dump question is CLOSED: the logged-in app still serves
+  `main.<hash>.js`, so the existing priority ordering is correct.
+- The safety gate is unchanged and applies to both streams. Added tests for the
+  retweet case specifically: a retweet by me of a foreign-authored post must
+  enumerate as exactly ONE item, mine, with `sourceTweetId` set to the foreign
+  original - the gate keys on the OUTER author, never on the embedded original.
+  The mirror case (a stranger's retweet) is still refused, and a non-retweet
+  arriving in the reposts stream is classified honestly as a post rather than
+  assumed to be a retweet.
+- Multi-stream enumeration is NOT implemented. The shape is proposed under KEY
+  FACTS and awaiting approval. Meanwhile a scan walks the posts stream only and
+  logs a loud "RETWEETS NOT INCLUDED" warning, because a result set that looks
+  complete and is not is worse than one that says what it is missing.
 
 Still not run against a live account end to end.

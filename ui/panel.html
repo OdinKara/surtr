@@ -25,7 +25,8 @@
     <dt>x.com tab</dt><dd id="st-tab" class="pending">not checked</dd>
     <dt>Bearer token</dt><dd id="st-bearer" class="pending">not discovered</dd>
     <dt>UserByScreenName</dt><dd id="st-q1" class="pending">not found</dd>
-    <dt>Timeline op</dt><dd id="st-q2" class="pending">not found</dd>
+    <dt>Posts op</dt><dd id="st-posts" class="pending">not found</dd>
+    <dt>Reposts op</dt><dd id="st-reposts" class="pending">not found</dd>
     <dt>Also in bundle</dt><dd id="st-alt" class="pending">&mdash;</dd>
   </dl>
   <p class="hint">
@@ -51,11 +52,17 @@
     <label>UserByScreenName queryId
       <input id="m-q1" type="text" spellcheck="false">
     </label>
-    <label>Timeline operation name
+    <label>Posts operation name
       <input id="m-op" type="text" spellcheck="false" placeholder="UserOriginalsTimeline">
     </label>
-    <label>Timeline queryId
+    <label>Posts queryId
       <input id="m-q2" type="text" spellcheck="false">
+    </label>
+    <label>Reposts operation name
+      <input id="m-op2" type="text" spellcheck="false" placeholder="UserRepostsTimeline">
+    </label>
+    <label>Reposts queryId
+      <input id="m-q3" type="text" spellcheck="false">
     </label>
     <button id="btn-manual" type="button" class="ghost">Apply override</button>
   </details>

@@ -252,6 +252,79 @@ const wrongId = mod.collectEntries(instructions, { expectedUserId: STRANGER });
 ok(wrongId.accepted === 1 && wrongId.tweets[0].result.legacy.id_str === FOREIGN_TWEET,
    'the gate keys on the id it is given, not on position');
 
+/* -------------------------------------------------------------------------
+ * A RETWEET BY ME OF A FOREIGN-AUTHORED POST.
+ *
+ * The gate must key on the OUTER entry's author. For a retweet the outer tweet
+ * is authored by ME; `retweeted_status_result` holds ANOTHER USER'S tweet, with
+ * their user id on it. Two ways to get this wrong, and this asserts against
+ * both:
+ *
+ *   - rejecting a legitimate retweet because the EMBEDDED original has a
+ *     foreign author (we would silently lose every retweet, and phase 2 would
+ *     never be able to undo them)
+ *   - accepting the embedded original as an enumerable item in its own right
+ *     (we would try to delete a stranger's post - the thing the whole gate
+ *     exists to prevent)
+ *
+ * The correct outcome is exactly ONE enumerated item: mine, kind "retweet",
+ * with sourceTweetId pointing at the foreign original.
+ * ------------------------------------------------------------------------- */
+
+const repostsInstructions = [
+  { type: 'TimelineClearCache' },
+  {
+    type: 'TimelineAddEntries',
+    entries: [
+      tweetEntry('tweet-' + MY_RETWEET, tweetResult(MY_RETWEET, ME, {
+        retweeted_status_result: { result: tweetResult(RT_SOURCE, RT_AUTHOR) },
+      })),
+      {
+        entryId: 'cursor-bottom-' + CURSOR,
+        content: {
+          entryType: 'TimelineTimelineCursor',
+          __typename: 'TimelineTimelineCursor',
+          cursorType: 'Bottom',
+          value: CURSOR,
+        },
+      },
+    ],
+  },
+];
+
+const rp = mod.collectEntries(repostsInstructions, { expectedUserId: ME });
+ok(rp.accepted === 1, 'a retweet of a foreign post enumerates as exactly ONE item');
+
+const rpPosts = rp.tweets.map((t) => mod.normalize(t, 'placeholder'));
+ok(rpPosts.length === 1 && rpPosts[0].id === MY_RETWEET,
+   'the enumerated id is MINE (the outer retweet), not the original');
+ok(rpPosts[0].kind === 'retweet', 'classified as retweet on its own evidence');
+ok(rpPosts[0].sourceTweetId === RT_SOURCE,
+   'sourceTweetId is the FOREIGN original id, captured for phase 2');
+ok(!rpPosts.some((x) => x.id === RT_SOURCE),
+   'the embedded original is NOT enumerated as an item in its own right');
+ok(Object.keys(rp.rejected).length === 0,
+   'the retweet is not rejected for having a foreign author on the embedded original');
+
+// And the mirror case: a retweet BY A STRANGER must still be refused outright.
+const foreignRepost = mod.collectEntries([{
+  type: 'TimelineAddEntries',
+  entries: [tweetEntry('tweet-' + FOREIGN_TWEET, tweetResult(FOREIGN_TWEET, STRANGER, {
+    retweeted_status_result: { result: tweetResult(RT_SOURCE, RT_AUTHOR) },
+  }))],
+}], { expectedUserId: ME });
+ok(foreignRepost.accepted === 0,
+   "someone else's retweet is refused on the OUTER author, embedded original irrelevant");
+
+// A non-retweet arriving in the reposts stream must be classified honestly.
+const oddOne = mod.collectEntries([{
+  type: 'TimelineAddEntries',
+  entries: [tweetEntry('tweet-' + MY_POST, tweetResult(MY_POST, ME))],
+}], { expectedUserId: ME });
+const oddPost = mod.normalize(oddOne.tweets[0], 'placeholder');
+ok(oddPost.kind === 'post',
+   'a non-retweet in the reposts stream classifies as post, not assumed retweet');
+
 /* positional indexing would have found nothing */
 ok(mod.collectEntries([instructions[0]], { expectedUserId: ME }).accepted === 0,
    'a TimelineClearCache-only instruction set yields no entries and does not throw');

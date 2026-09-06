@@ -138,6 +138,22 @@
         );
       }
 
+      // RETWEETS ARE NOT IN THIS RUN. UserOriginalsTimeline is posts-only
+      // (confirmed live), and retweets live in a separate reposts stream that
+      // enumeration does not walk yet. Say so loudly rather than quietly
+      // returning a result set that looks complete and is not.
+      const repostsOp = record.timelines.reposts.selected;
+      await store.log(
+        'warn',
+        'RETWEETS NOT INCLUDED: this build walks the posts stream only (' +
+        record.timelines.posts.selected + '). ' +
+        (repostsOp
+          ? 'The reposts stream (' + repostsOp + ') resolved but multi-stream ' +
+            'enumeration is not implemented yet.'
+          : 'No reposts operation resolved from the bundle either.') +
+        ' Treat this run as posts and replies only.'
+      );
+
       const seenIds = new Set(all.map((p) => p.id));
 
       const outcome = await enumerate.walkTimeline({
@@ -145,8 +161,10 @@
         screenName: who.screenName,
         bearer: record.bearer,
         queryIds: record.queryIds,
-        // Chosen by discovery from TIMELINE_CANDIDATES, never hardcoded.
-        operationName: record.selectedTimeline,
+        // Chosen by discovery from that stream's candidate list, never
+        // hardcoded. ONLY the posts stream is walked for now - see the warning
+        // logged above; multi-stream merging is not implemented yet.
+        operationName: record.timelines.posts.selected,
         startCursor: resuming ? job.cursor : null,
         seenCursors: resuming ? job.seenCursors || [] : [],
         onLog,
@@ -172,7 +190,9 @@
           // First page back means the operation is not just present in the
           // bundle, it is actually served. Only this upgrades the panel from
           // "in bundle" to "confirmed live".
-          if (state.pages === 1) await discovery.markConfirmedLive(record.selectedTimeline);
+          if (state.pages === 1) {
+            await discovery.markConfirmedLive('posts', record.timelines.posts.selected);
+          }
         },
       });
 
@@ -239,9 +259,8 @@
               // needs to know whether we have one.
               hasBearer: Boolean(record.bearer),
               queryIds: record.queryIds,
-              selectedTimeline: record.selectedTimeline,
-              timelineFound: record.timelineFound,
-              confirmedLive: record.confirmedLive,
+              timelines: record.timelines,
+              unusedCandidates: record.unusedCandidates,
               missing: record.missing,
               manual: Boolean(record.manual),
               bundle: record.bundleUrl,

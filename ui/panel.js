@@ -100,40 +100,49 @@ function setStatus(el, ok, text) {
 }
 
 /**
- * Connection rows.
+ * Connection rows, one per stream.
  *
- * The distinction this renders is the important one: a query id found in X's
- * bundle is NOT evidence that the site still serves that operation. X retired
- * UserTweetsAndReplies while its id was still sitting in the bundle, so a panel
- * that says "discovered" off a bundle hit is lying by omission. Nothing here
- * claims more than it knows - "in bundle" until a request comes back, and only
- * then "confirmed live".
+ * Two things this must get right.
+ *
+ * First: a query id found in X's bundle is NOT evidence that the site still
+ * serves that operation. X retired UserTweetsAndReplies while its id was still
+ * sitting in the bundle, so a row that says "discovered" off a bundle hit is
+ * lying by omission. Nothing here claims more than it knows - "in bundle" until
+ * a request comes back, and only then "confirmed live".
+ *
+ * Second: the posts and reposts streams fail SEPARATELY and are reported
+ * separately. "Posts resolved, reposts did not" is a completely different
+ * problem from the reverse, and one collapsed "discovery failed" row would tell
+ * you nothing about which half X renamed.
  */
 function renderDiscovery(d) {
+  const row = (id, stream) => {
+    const el = $(id);
+    if (!stream) { setStatus(el, null, 'not found'); return; }
+    if (!stream.selected) { setStatus(el, false, 'NONE FOUND'); return; }
+    const live = stream.confirmedLive === stream.selected;
+    setStatus(el, true, stream.selected + (live ? '  [confirmed live]' : '  [in bundle]'));
+  };
+
   if (!d) {
     setStatus($('st-bearer'), null, 'not discovered');
     setStatus($('st-q1'), null, 'not found');
-    setStatus($('st-q2'), null, 'not found');
+    row('st-posts', null);
+    row('st-reposts', null);
     setStatus($('st-alt'), null, '—');
     return;
   }
-  setStatus($('st-bearer'), Boolean(d.bearer), d.bearer ? 'present' : 'MISSING');
 
+  setStatus($('st-bearer'), Boolean(d.bearer), d.bearer ? 'present' : 'MISSING');
   const q = d.queryIds || {};
   setStatus($('st-q1'), Boolean(q.UserByScreenName), q.UserByScreenName || 'MISSING');
 
-  const sel = d.selectedTimeline || null;
-  if (!sel) {
-    setStatus($('st-q2'), false, 'NONE FOUND');
-  } else {
-    const live = d.confirmedLive === sel;
-    setStatus($('st-q2'), true, sel + (live ? '  [confirmed live]' : '  [in bundle]'));
-  }
+  const t = d.timelines || {};
+  row('st-posts', t.posts);
+  row('st-reposts', t.reposts);
 
-  // Every other candidate the bundle also carries. When X renames things again,
-  // this row is where you see it first.
-  const others = (d.timelineFound || []).filter((n) => n !== sel);
-  setStatus($('st-alt'), null, others.length ? others.join(', ') : '—');
+  const unused = d.unusedCandidates || [];
+  setStatus($('st-alt'), null, unused.length ? unused.join(', ') : '—');
 
   if (d.missing && d.missing.length > 0) $('manual-wrap').open = true;
 }
@@ -368,14 +377,12 @@ $('btn-rediscover').addEventListener('click', async () => {
 });
 
 $('btn-manual').addEventListener('click', async () => {
-  const op = $('m-op').value.trim() || 'UserOriginalsTimeline';
-  const values = {
-    bearer: $('m-bearer').value.trim(),
-    queryIds: {
-      UserByScreenName: $('m-q1').value.trim(),
-      [op]: $('m-q2').value.trim(),
-    },
-  };
+  const postsOp = $('m-op').value.trim() || 'UserOriginalsTimeline';
+  const repostsOp = $('m-op2').value.trim() || 'UserRepostsTimeline';
+  const queryIds = { UserByScreenName: $('m-q1').value.trim() };
+  if ($('m-q2').value.trim()) queryIds[postsOp] = $('m-q2').value.trim();
+  if ($('m-q3').value.trim()) queryIds[repostsOp] = $('m-q3').value.trim();
+  const values = { bearer: $('m-bearer').value.trim(), queryIds };
   await send({ type: 'SURTR_MANUAL', values });
   await paint();
 });
