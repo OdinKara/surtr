@@ -403,6 +403,181 @@ ok(selfReply.sourceTweetId === null,
      'the secondary source returns null when absent, with no speculative fallbacks');
 }
 
+/* -------------------------------------------------------------------------
+ * CONVERSATION MODULES - the highest-risk parsing in the project.
+ *
+ * UserRepliesTimeline returns no flat entries at all. Replies arrive wrapped in
+ * `profile-conversation-` modules whose items[] hold the whole thread, which
+ * means the module CONTAINS OTHER PEOPLE'S TWEETS BY DEFINITION - the person
+ * being replied to is right there next to my reply, in the same array, in the
+ * same shape.
+ *
+ * Measured on a live page: 20 modules, 39 items, 20 mine and 19 foreign across
+ * 18 distinct foreign authors. So the walk must pick out exactly my 20 and
+ * leave the other 19 alone, using nothing but the author check.
+ * ------------------------------------------------------------------------- */
+
+const convItem = (entryId, result, dispensable) => ({
+  entryId,
+  dispensable,
+  item: {
+    itemContent: {
+      __typename: 'TimelineTweet',
+      itemType: 'TimelineTweet',
+      tweetDisplayType: 'Tweet',
+      tweet_results: { result },
+    },
+  },
+});
+
+const conversationModule = (entryId, items) => ({
+  entryId,
+  content: {
+    __typename: 'TimelineTimelineModule',
+    entryType: 'TimelineTimelineModule',
+    displayType: 'VerticalConversation',
+    items,
+  },
+});
+
+const reply = (id, author, inReplyTo) =>
+  tweetResult(id, author, { in_reply_to_status_id_str: inReplyTo,
+                            in_reply_to_screen_name: 'someone' });
+
+{
+  // One of my replies plus two foreign tweets, exactly as a real thread arrives.
+  const mod2 = conversationModule('profile-conversation-9001', [
+    convItem('profile-conversation-9001-tweet-' + FOREIGN_TWEET,
+             reply(FOREIGN_TWEET, STRANGER, '7000000000000000000'), true),
+    convItem('profile-conversation-9001-tweet-' + MY_REPLY,
+             reply(MY_REPLY, ME, FOREIGN_TWEET), false),
+    convItem('profile-conversation-9001-tweet-' + FOREIGN_PINNED_B,
+             reply(FOREIGN_PINNED_B, STRANGER_2, MY_REPLY), true),
+  ]);
+
+  const r = mod.collectEntries(
+    [{ type: 'TimelineClearCache' }, { type: 'TimelineAddEntries', entries: [mod2] }],
+    { expectedUserId: ME });
+
+  ok(r.accepted === 1, 'a 3-item conversation module enumerates EXACTLY ONE item (mine)');
+  const got = r.tweets.map((t) => mod.normalize(t, 'placeholder'));
+  ok(got[0].id === MY_REPLY, 'the enumerated item is mine');
+  ok(got[0].kind === 'reply', 'it classifies as kind "reply" from the entry');
+  const blob = JSON.stringify(got);
+  ok(!blob.includes(FOREIGN_TWEET) && !blob.includes(FOREIGN_PINNED_B),
+     "neither foreign tweet in the thread is enumerated");
+  ok(!blob.includes(STRANGER) && !blob.includes(STRANGER_2),
+     'no foreign author id reaches the output');
+  const foreignCount = Object.entries(r.rejected)
+    .filter(([k]) => /FOREIGN AUTHOR/.test(k))
+    .reduce((a, [, n]) => a + n, 0);
+  ok(foreignCount === 2, 'both foreign items are COUNTED as rejections, got ' + foreignCount);
+  ok(/profile-conversation/.test(Object.keys(r.rejected).join(' ')),
+     'rejections are attributed to the profile-conversation prefix');
+  ok(r.dispensableAnomalies.length === 0,
+     'dispensable agrees with authorship, so no cross-check warning');
+}
+
+{
+  // A module with no item of mine must enumerate nothing.
+  const foreignOnly = conversationModule('profile-conversation-9002', [
+    convItem('profile-conversation-9002-tweet-' + FOREIGN_TWEET,
+             reply(FOREIGN_TWEET, STRANGER, '7000000000000000000'), true),
+  ]);
+  const r = mod.collectEntries(
+    [{ type: 'TimelineAddEntries', entries: [foreignOnly] }], { expectedUserId: ME });
+  ok(r.accepted === 0, 'a module whose only item is foreign enumerates NOTHING');
+  ok(Object.values(r.rejected).reduce((a, b) => a + b, 0) === 1,
+     'and the foreign item is still counted');
+}
+
+{
+  // THE ONE THAT MUST NOT REGRESS: who-to-follow is a module too.
+  const r = mod.collectEntries(
+    [{ type: 'TimelineAddEntries', entries: [whoToFollowEntry] }], { expectedUserId: ME });
+  ok(r.accepted === 0,
+     'the who-to-follow module is STILL rejected whole after modules became walkable');
+  ok(/who-to-follow/.test(Object.keys(r.rejected).join(' ')),
+     'and it is counted under its own prefix');
+
+  // Same module, relabelled as a conversation: the entryId prefix must not be
+  // enough on its own to open it up.
+  const disguised = JSON.parse(JSON.stringify(whoToFollowEntry));
+  disguised.entryId = 'profile-conversation-9003';
+  const r2 = mod.collectEntries(
+    [{ type: 'TimelineAddEntries', entries: [disguised] }], { expectedUserId: ME });
+  ok(r2.accepted === 0,
+     'a who-to-follow module renamed to profile-conversation is still not walked ' +
+     '(displayType is not VerticalConversation)');
+}
+
+{
+  // A non-TimelineTweet item inside a conversation module.
+  const withStub = conversationModule('profile-conversation-9004', [
+    { entryId: 'profile-conversation-9004-tweet-stub', dispensable: false,
+      item: { itemContent: { __typename: 'TimelineTimelineCursor', cursorType: 'ShowMore' } } },
+    convItem('profile-conversation-9004-tweet-' + MY_REPLY,
+             reply(MY_REPLY, ME, FOREIGN_TWEET), false),
+  ]);
+  const r = mod.collectEntries(
+    [{ type: 'TimelineAddEntries', entries: [withStub] }], { expectedUserId: ME });
+  ok(r.accepted === 1, 'a non-TimelineTweet item is skipped and the real reply still lands');
+  ok(/itemContent is TimelineTimelineCursor/.test(Object.keys(r.rejected).join(' ')),
+     'the non-tweet item is rejected and counted by what it actually was');
+}
+
+{
+  // dispensable is a CROSS-CHECK, never the gate.
+  const inverted = conversationModule('profile-conversation-9005', [
+    // Mine, but flagged dispensable - the gate must still accept it.
+    convItem('profile-conversation-9005-tweet-' + MY_REPLY,
+             reply(MY_REPLY, ME, FOREIGN_TWEET), true),
+    // Foreign, but NOT flagged dispensable - the gate must still refuse it.
+    convItem('profile-conversation-9005-tweet-' + FOREIGN_TWEET,
+             reply(FOREIGN_TWEET, STRANGER, MY_REPLY), false),
+  ]);
+  const r = mod.collectEntries(
+    [{ type: 'TimelineAddEntries', entries: [inverted] }], { expectedUserId: ME });
+
+  ok(r.accepted === 1 && r.tweets[0].result.legacy.id_str === MY_REPLY,
+     'AUTHORSHIP decides: my item is accepted even when dispensable says otherwise');
+  ok(/FOREIGN AUTHOR/.test(Object.keys(r.rejected).join(' ')),
+     'and the foreign item is refused even though dispensable said to keep it');
+  ok(r.dispensableAnomalies.length === 2,
+     'both divergences are recorded as cross-check anomalies, got ' +
+     r.dispensableAnomalies.length);
+  ok(r.dispensableAnomalies.every((a) => typeof a.mine === 'boolean'),
+     'each anomaly records which side it was');
+}
+
+{
+  // THE HAZARD THE CAPTURE EXPOSED: every author object carries its own
+  // tweet_counts, including the foreign ones. The live page held 19 different
+  // totals. Reading the account total off an ungated item would hand the
+  // completeness check a stranger's denominator.
+  const mine = reply(MY_REPLY, ME, FOREIGN_TWEET);
+  mine.core = { user_results: { result: { legacy: { screen_name: 'placeholder' },
+                                          tweet_counts: { tweets: 2616 } } } };
+  const theirs = reply(FOREIGN_TWEET, STRANGER, '7000000000000000000');
+  theirs.core = { user_results: { result: { legacy: { screen_name: 'stranger' },
+                                            tweet_counts: { tweets: 359228 } } } };
+
+  const m = conversationModule('profile-conversation-9006', [
+    convItem('profile-conversation-9006-tweet-' + FOREIGN_TWEET, theirs, true),
+    convItem('profile-conversation-9006-tweet-' + MY_REPLY, mine, false),
+  ]);
+  const r = mod.collectEntries(
+    [{ type: 'TimelineAddEntries', entries: [m] }], { expectedUserId: ME });
+
+  ok(r.accepted === 1, 'only my item is accepted out of the mixed-author module');
+  const totals = r.tweets.map((t) => mod.accountTotalFromTweet(t.result));
+  ok(totals.length === 1 && totals[0] === 2616,
+     'the account total comes from MY author object (2616), never the stranger\'s (359228)');
+  ok(mod.accountTotalFromTweet(theirs) === 359228,
+     "the stranger's own count is readable in isolation - which is exactly why the " +
+     'total must only ever be taken from an ACCEPTED entry');
+}
+
 /* positional indexing would have found nothing */
 ok(mod.collectEntries([instructions[0]], { expectedUserId: ME }).accepted === 0,
    'a TimelineClearCache-only instruction set yields no entries and does not throw');

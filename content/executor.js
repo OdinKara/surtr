@@ -251,6 +251,7 @@
                 job.reportedTotalSource = state.reportedTotalSource || 'timeline-entry';
               }
               st.rejected = state.rejected;
+              st.dispensableAnomalies = state.dispensableAnomalies || 0;
 
               const partition = filters.partition(all, config);
               job.enumerated = all.length;

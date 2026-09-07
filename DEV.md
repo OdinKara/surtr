@@ -364,31 +364,85 @@ evidence of a clean sweep. It now returns `complete: false` with
 assessed**. A test asserting the old behaviour was corrected — it had encoded
 the bug.
 
-### BLOCKED: the replies stream enumerates nothing
+### Conversation modules: how replies are actually reached
 
-`UserRepliesTimeline` returns 50+ pages and enumerates **zero**. The rejection
-counter tells the story:
+`UserRepliesTimeline` returns **no flat entries at all**. Every reply arrives
+wrapped in a `profile-conversation-` module, so the three-part gate — which only
+ever looked at flat `TimelineTimelineItem` entries — rejected all of them and
+the stream enumerated zero. The gate failing closed on an unrecognised shape was
+correct behaviour; it just meant replies were unreachable.
+
+Shape, from a captured live page 1 (22 entries: 20 modules + 2 cursors):
 
 ```
-1 x who-to-follow (not a TimelineTimelineItem)
-1000 x profile-conversation (not a TimelineTimelineItem)
+content.__typename  = "TimelineTimelineModule"
+content.entryType   = "TimelineTimelineModule"
+content.displayType = "VerticalConversation"        <- the scope
+entryId             = "profile-conversation-N"
+content.items[]     = [{ dispensable, entryId, item }]
+  item.itemContent.__typename       = "TimelineTweet"
+  item.itemContent.tweetDisplayType = "Tweet"
+  item.itemContent.tweet_results.result = a normal tweet, IDENTICAL to a flat entry
 ```
 
-Replies come back wrapped in **`profile-conversation` module entries**, not as
-flat `TimelineTimelineItem` entries, so the three-part gate refuses every one of
-them. **The gate behaved correctly and failed closed** — which is the designed
-behaviour and the right outcome for an unrecognised shape — but it means replies
-are unreachable and the ~2,000 shortfall cannot close.
+Cursors stay at the **top level** of entries (`cursor-bottom-N`), never inside a
+module, so pagination is untouched.
 
-Not fixed yet, deliberately: the parser change is **the highest-risk one in the
-project so far**. A conversation module contains other participants' tweets by
-definition — the person being replied to is in there — so walking into modules
-must enumerate only our own replies and never the other participants' posts. The
-author check does not get relaxed, and "walk into modules" must be scoped to
-conversation modules specifically: the `who-to-follow` module is a module too
-and must still be rejected whole.
+**Modules are walked only when all three hold**: `entryType` is
+`TimelineTimelineModule`, `displayType` is `VerticalConversation`, and the
+entryId starts with `profile-conversation`. That triple scoping is deliberate.
+"Walk into modules" as a general rule would also open the `who-to-follow-`
+module — which is a module too, and is full of suggested accounts and their
+pinned tweet ids. Broadening this predicate is exactly how the safety property
+would get lost quietly, so there is a test asserting a who-to-follow module is
+still rejected whole, and another asserting one *renamed* to
+`profile-conversation` is still not walked.
 
-Waiting on a captured `UserRepliesTimeline` body before touching it.
+**The gate is applied per item, unmodified.** A conversation module contains the
+other participants by definition — the person being replied to is in the same
+array, in the same shape — so this was the highest-risk parsing change in the
+project. The author check is not relaxed anywhere.
+
+### `dispensable` is a cross-check, not the gate
+
+On the captured page the correlation was perfect: all 20 of my items were
+`dispensable: false`, all 19 foreign items `dispensable: true`.
+
+It is still **not** the gate and must never become one. Keying on it would mean
+trusting a display hint with the question of whose posts we are about to
+enumerate. It is used only as an independent detector: an item that is mine but
+dispensable, or foreign but not, logs a warning naming the entry ids, because a
+divergence means the model of these modules is wrong. There are tests asserting
+that authorship still decides the outcome when the two disagree in **both**
+directions.
+
+### Verified against the live capture, not just fixtures
+
+The real captured body was run through the real parser:
+
+| check | result |
+|---|---|
+| items enumerated | **20**, all `kind: "reply"` |
+| foreign author ids in the output | **0** (18 foreign authors on the page) |
+| foreign tweet ids in the output | **0** (19 foreign tweets in the threads) |
+| rejections | 19, every one `profile-conversation (FOREIGN AUTHOR)` |
+| dispensable anomalies | 0 |
+| bottom cursor | found at top level |
+
+Nothing was rejected for an unexpected shape, which means the parser understands
+the whole page rather than coincidentally surviving it.
+
+### The account total is only safe from an ACCEPTED entry
+
+The capture exposed a hazard that the fixtures would not have. **Every author
+object carries its own `tweet_counts`** — the page held **19 different totals**,
+from 14 to 359,228, one per participant in the threads.
+
+Reading the account total off an ungated item would hand the completeness check
+a stranger's denominator, and it would look entirely plausible. The total is
+therefore taken only from an entry that has already passed the gate. Tested both
+ways: the accepted-entry total is single-valued, and the stranger's count is
+readable in isolation, which is precisely why the accepted-only rule matters.
 
 ### CLOSED: no bundle dump needed
 
@@ -945,3 +999,29 @@ Live three-stream run. posts and reposts clean; replies enumerated nothing.
   parsing lands.
 
 Suite: parser 46, streams 62, filters 23.
+
+### 2026-09-06 — Conversation modules: replies are reachable
+
+`UserRepliesTimeline` wraps every reply in a `profile-conversation` /
+`VerticalConversation` module. Those are now walked, with the three-part gate
+applied per item unchanged, scoped so `who-to-follow` modules stay rejected
+whole.
+
+Verified against the captured live body, not only fixtures: 20 items
+enumerated, all replies, **zero** foreign author ids and **zero** foreign tweet
+ids in the output, 19 rejections all `FOREIGN AUTHOR`, cursor still top-level.
+
+`dispensable` correlated perfectly with authorship on that page but is used only
+as a cross-check; authorship decides, and tests assert that in both directions.
+
+The capture also caught a hazard the fixtures could not: every author object
+carries its own `tweet_counts`, 19 different totals on one page. The account
+total is only ever read from an entry that passed the gate.
+
+Still to re-check on the next live run (Finding 5): with replies enumerating,
+`expectedOverlapDeduped` should become non-zero — UserOriginalsTimeline returns
+entries with `in_reply_to_status_id_str`, so self-replies will appear in both
+streams — while `crossStreamDuplicates` stays 0. Both were 0 last run only
+because the replies stream produced nothing to collide with.
+
+Suite: parser 68, streams 62, filters 23.
