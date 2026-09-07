@@ -2028,3 +2028,107 @@ colour, and a 14% scale-up so it fills the tile. First attempt used a 3px
 non-scaling stroke, which at 16px is 3 DEVICE pixels and closed the counters
 completely - the S rendered as a solid red blob. Checked by eye at 12x, which
 is the only way to catch that.
+
+## RECORDED RUN RESULTS
+
+Hand-verified session results. Recorded here so they can be cited: a number the
+repo does not record is a number nothing can be checked against, and the README
+is not allowed to assert one.
+
+### The validated three-stream scan
+
+Build `9c00d06286a0`. 2,600 of the 2,616 items X reported (99%), `complete:
+true`, shortfall 16, 0 cross-stream duplicates, 0 foreign permalinks across the
+898 matched, 2 rate limits on the replies stream both recovered with all items
+retrieved.
+
+| stream | operation | pages | enumerated |
+|---|---|---|---|
+| posts | `UserOriginalsTimeline` | 25 | 480 |
+| reposts | `UserRepostsTimeline` | 8 | 124 |
+| replies | `UserRepliesTimeline` | 101 | 1,996 |
+| **total** | | **134** | **2,600** |
+
+Replies are 77% of this account, which is why a two-stream tool was not fit for
+purpose and why the third stream was added.
+
+### Deletions
+
+| run | dispatched | outcome |
+|---|---|---|
+| 5-item test #1 | 5 | 5 deleted, hand-verified, 5 targets gone and 4 controls untouched |
+| 5-item test #2 | 5 | 5 deleted, hand-verified |
+| posts run | 447 | 445 deleted, 2 deferred |
+| deferred follow-up | 2 | 2 deleted |
+| reposts run | 119 | 118 confirmed by echoed id, 1 `unverified-ok` |
+| **total** | **578 dispatched** | **576 deleted** |
+
+The 2 deferred were 429s under the pre-fix classification that graded a
+rate-limit as a failure; they were re-dispatched after the window and deleted.
+5 of the 119 reposts had already been unretweeted by the earlier tests and still
+returned success - the already-gone limitation, observed rather than theorised.
+
+### The external check, and the part of it that does not reconcile
+
+X's own reported account total moved **2,616 -> 2,606 -> 2,035** across the
+session. That is a drop of **581** against **576 deleted**, and the direction and
+magnitude corroborate the tool's own count.
+
+**The 5-item difference is not accounted for.** Candidates: X's `tweet_counts`
+may include or exclude reposts differently from the way this tally does; the
+count may lag; something may have been deleted from another client during the
+session. None of these has been verified, so none is written down as the answer.
+It is recorded as an open discrepancy because a 99% reconciliation reported as
+exact is the same class of error as a run reporting `complete` at 23% - the
+number is close enough to be reassuring and that is exactly why the gap has to
+be stated rather than rounded away.
+
+### The audit instructions caught their own author first
+
+While rewriting the README, the host-enumeration audit command - written FOR
+READERS - was run against the tree and returned a third host nobody had
+accounted for: `donate.grimnirworks.com`, the heart link in the panel header. It
+is never fetched, but the README's prose at that moment said there were two
+hosts, and a reader following the instructions would have found three.
+
+That is the strongest available evidence that the audit steps work. They are not
+a gesture at auditability; run honestly, they found a discrepancy in the very
+document that publishes them, before any reader could. An audit instruction you
+have not run yourself is a claim, not an instruction.
+
+### A document that tells a reader to verify forces you to verify
+
+Step 8 of the audit tells the reader to run the test suite. Writing that line
+meant running it - and it was **failing**. The tree-wide control-byte guard
+scans every file in the repo, and `icons/*.png` are legitimately full of control
+bytes; it broke at the icon commit, where the suite was not re-run.
+
+The failure had been sitting there through a push. Nothing else would have
+caught it, because nothing else was going to run that suite. It was caught only
+because the README was about to instruct a stranger to run it, and a document
+cannot tell someone to check something that does not pass.
+
+**This is a reason to prefer a verifiable claim over an assertion**, beyond what
+it does for the reader. "There are four fetch call sites, here is the grep"
+obliges the author to run the grep. "Surtr does not phone home" obliges nobody
+and can rot silently for months. Every checkable claim in that README is a
+tripwire pointed at its own author, which is most of why the document is written
+that way.
+
+### 2026-09-07 - Run results recorded, README rewritten
+
+- **The numbers are in the repo now.** Per-stream breakdown of the 2,600-item
+  scan, and every deletion run. They were refused as README citations until
+  they were recorded, which was the right call: a cited number the repo cannot
+  produce is unverifiable by exactly the reader the document is written for.
+- **581 vs 576 recorded as an open discrepancy** rather than reconciled by
+  assumption.
+- **The audit instructions found a fault in their own document** before a reader
+  could, and the test suite was found broken because the README was about to
+  tell someone to run it. Both written up above as arguments for verifiable
+  claims over assertions.
+- `.mailmap` maps the transposed author address across 21 of 26 commits. History
+  is not rewritten: it is part of the trust argument, and trading it for a
+  cosmetic typo fix is a bad deal.
+
+Suite: parser 69, streams 90, execute 206, build 27.

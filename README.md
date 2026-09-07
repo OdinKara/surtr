@@ -419,23 +419,50 @@ takes to send `tweet_id` where `source_tweet_id` was meant.
 ### What has actually been run
 
 Understating what a deletion tool has done would be its own kind of dishonesty,
-so, precisely:
+so, precisely. Every figure below is recorded in
+[DEV.md](DEV.md#recorded-run-results) under *Recorded run results*.
 
-- **Scanning is validated live.** A three-stream run enumerated **2,600 of the
-  2,616 items X reported for the account (99%)**, `complete: true`, 0
-  cross-stream duplicates, 0 foreign permalinks across 898 matched items, and
-  two rate limits on the replies stream, both recovered with all items retrieved.
-- **Deleting has been run against a live account.** Both write operations have
-  success shapes **captured from real responses to real deletions** — that is
-  where the shapes in `CONFIRMED_SUCCESS_SHAPES` came from; they are not guesses.
-- Two hand-verified 5-item test runs: all 5 targets gone, 4 untouched controls
-  still present, X's own account total moving 2,616 → 2,611.
-- A 119-item repost run: 119 dispatched, 118 confirmed by echoed id, 1
-  unverified-ok because the original post no longer existed. The account's
-  Reposts tab is empty. Five of the 119 had already been unretweeted by earlier
-  tests and still returned success — which is the already-gone limitation above,
-  observed rather than theorised.
+**Scanning is validated live.** One three-stream run enumerated **2,600 of the
+2,616 items X reported for the account (99%)**, `complete: true`, 0 cross-stream
+duplicates, 0 foreign permalinks across the 898 matched items, and 2 rate limits
+on the replies stream, both recovered with every item retrieved.
 
+| stream | pages | enumerated |
+|---|---|---|
+| posts | 25 | 480 |
+| reposts | 8 | 124 |
+| replies | 101 | 1,996 |
+| **total** | **134** | **2,600** |
+
+**Deleting has been run against a live account, and 576 items are gone.** Both
+write operations have success shapes **captured from real responses to real
+deletions** — that is where `CONFIRMED_SUCCESS_SHAPES` came from; they are not
+guesses.
+
+| run | dispatched | outcome |
+|---|---|---|
+| two 5-item test runs | 10 | 10 deleted, hand-verified: targets gone, controls untouched |
+| posts | 447 | 445 deleted, 2 deferred on a 429 |
+| deferred follow-up | 2 | 2 deleted |
+| reposts | 119 | 118 confirmed by echoed id, 1 unverified-ok |
+| **total** | **578** | **576 deleted** |
+
+The Reposts tab is empty. Five of the 119 reposts had already been unretweeted
+by the earlier tests and still returned success — the already-gone limitation
+above, observed rather than theorised.
+
+**The external check, including the part that does not reconcile.** X's own
+reported account total moved **2,616 → 2,035** over the session. That is a drop
+of **581** against **576 deleted**: the direction and magnitude corroborate the
+tool's own count, and **the 5-item difference is not accounted for.** It could be
+X counting reposts differently from this tally, a lagging count, or something
+deleted from another client — none of which has been verified, so none of them is
+written down as the answer.
+
+It is stated rather than rounded away because a 99% reconciliation reported as
+exact is the same class of mistake as a run reporting `complete` having seen 23%
+of an account: close enough to be reassuring, which is precisely why the gap has
+to be said out loud.
 ---
 
 ## Install (unpacked)
