@@ -137,6 +137,7 @@ function renderDiscovery(d) {
   }
 
   setStatus($('st-bearer'), Boolean(d.bearer), d.bearer ? 'present' : 'MISSING');
+  summariseConnection(d);
   const q = d.queryIds || {};
   setStatus($('st-q1'), Boolean(q.UserByScreenName), q.UserByScreenName || 'MISSING');
 
@@ -156,6 +157,33 @@ function renderDiscovery(d) {
     renderDiscovery._openedManual = true;
     $('manual-wrap').open = true;
   }
+}
+
+/**
+ * The one line somebody who is not debugging should read.
+ *
+ * The queryIds, build fingerprint and "in bundle" / "confirmed live" wording all
+ * still exist, unchanged, behind the Diagnostics disclosure - that is how a
+ * rename gets diagnosed. They are simply not the first thing on screen.
+ */
+function summariseConnection(d) {
+  const el = $('conn-summary');
+  if (!el) return;
+  if (!d) {
+    el.className = 'lede';
+    el.textContent = 'Not connected yet. Open x.com in a tab and press Connect.';
+    return;
+  }
+  const missing = d.missing || [];
+  if (missing.length === 0) {
+    el.className = 'lede ready';
+    el.textContent = 'Ready. Surtr can read your posts, replies and reposts.';
+    return;
+  }
+  el.className = 'lede notready';
+  el.textContent = 'Not ready yet \u2014 ' + missing.join(', ') +
+    ' could not be found. Make sure you are signed in to x.com, then press ' +
+    'Connect again. Diagnostics below has the detail.';
 }
 
 function renderJob(job) {
@@ -378,6 +406,60 @@ function preview(text) {
   return t.length > 140 ? t.slice(0, 140) + '…' : t;
 }
 
+/**
+ * One item, as a two-line block rather than a table row.
+ *
+ * Six columns cannot be read in a 380px side panel - the text was cut off and
+ * needed horizontal scrolling, and the text is the column that matters: it is
+ * how somebody recognises a post they did not mean to lose. This list is a
+ * safety surface, so it has to be legible at the width it actually gets.
+ */
+function itemBlock(p) {
+  const el = document.createElement('div');
+  el.className = 'item';
+
+  const head = document.createElement('div');
+  head.className = 'item-head';
+
+  const date = document.createElement('span');
+  date.textContent = p.createdAt ? p.createdAt.slice(0, 10) : 'undated';
+
+  const kind = document.createElement('span');
+  kind.className = 'item-kind';
+  kind.textContent = KIND_LABEL[p.kind] || p.kind || 'item';
+
+  const stats = document.createElement('span');
+  stats.className = 'item-stats';
+  stats.textContent = (p.likeCount || 0) + ' likes \u00b7 ' + (p.retweetCount || 0) + ' reposts';
+
+  const a = document.createElement('a');
+  a.className = 'item-link';
+  a.href = p.permalink;
+  a.target = '_blank';
+  a.rel = 'noopener noreferrer';
+  a.textContent = 'view';
+
+  head.append(date, kind, stats, a);
+
+  const text = document.createElement('div');
+  const t = String(p.text || '').replace(/\s+/g, ' ').trim();
+  text.className = t ? 'item-text' : 'item-text empty';
+  text.textContent = t || '(no text)';
+
+  el.append(head, text);
+  return el;
+}
+
+const KIND_LABEL = { post: 'post', reply: 'reply', retweet: 'repost' };
+
+function placeholder(container, message) {
+  container.textContent = '';
+  const p = document.createElement('div');
+  p.className = 'placeholder';
+  p.textContent = message;
+  container.append(p);
+}
+
 function renderResults(posts, cfg) {
   const { matched } = filters.partition(posts || [], cfg);
   $('res-count').textContent = matched.length;
@@ -386,61 +468,23 @@ function renderResults(posts, cfg) {
   body.textContent = '';
 
   if (matched.length === 0) {
-    const tr = document.createElement('tr');
-    tr.className = 'empty';
-    const td = document.createElement('td');
-    td.colSpan = 6;
-    td.textContent = (posts && posts.length)
-      ? 'Nothing matched these filters. ' + posts.length + ' posts were enumerated.'
-      : 'No scan has run yet.';
-    tr.append(td);
-    body.append(tr);
+    placeholder(body, (posts && posts.length)
+      ? 'Nothing matches these filters yet. ' + posts.length +
+        ' items were read - try loosening a filter.'
+      : 'Nothing scanned yet. Press "Scan my account" above.');
     $('res-more').hidden = true;
     return matched;
   }
 
   const frag = document.createDocumentFragment();
-  for (const p of matched.slice(0, MAX_ROWS)) {
-    const tr = document.createElement('tr');
-
-    const date = document.createElement('td');
-    date.className = 'num';
-    date.textContent = p.createdAt ? p.createdAt.slice(0, 10) : '?';
-
-    const kind = document.createElement('td');
-    kind.className = 'kind';
-    kind.textContent = p.kind;
-
-    const likes = document.createElement('td');
-    likes.className = 'num';
-    likes.textContent = p.likeCount;
-
-    const rts = document.createElement('td');
-    rts.className = 'num';
-    rts.textContent = p.retweetCount;
-
-    const txt = document.createElement('td');
-    txt.className = 'txt';
-    txt.textContent = preview(p.text);
-
-    const link = document.createElement('td');
-    const a = document.createElement('a');
-    a.href = p.permalink;
-    a.target = '_blank';
-    a.rel = 'noreferrer';
-    a.textContent = 'open';
-    link.append(a);
-
-    tr.append(date, kind, likes, rts, txt, link);
-    frag.append(tr);
-  }
+  for (const p of matched.slice(0, MAX_ROWS)) frag.append(itemBlock(p));
   body.append(frag);
 
   const more = $('res-more');
   if (matched.length > MAX_ROWS) {
     more.textContent =
       'Showing the first ' + MAX_ROWS + ' of ' + matched.length +
-      '. Export to see them all.';
+      '. Save the list to see them all.';
     more.hidden = false;
   } else {
     more.hidden = true;
@@ -698,28 +742,37 @@ async function refreshExecute() {
   const blocked = $('exec-blocked');
   const body = $('exec-body');
 
+  // Same conditions, same order, reworded. Nothing here decides anything: the
+  // executor re-derives and re-checks every one of these before dispatching.
   const reasons = [];
   if (job.status !== store.JOB_DONE && job.status !== store.JOB_PARTIAL) {
-    reasons.push('no completed scan in this session');
+    reasons.push('no finished scan yet');
   }
   if (!execSession || !job.scanSessionId || job.scanSessionId !== execSession.sessionId) {
-    reasons.push('the scan was not completed in this page session - re-scan first');
+    reasons.push('this scan is from an earlier session, so scan again');
   }
   if (job.scanConfigFingerprint &&
       job.scanConfigFingerprint !== execute.configFingerprint(config)) {
-    reasons.push('filters have changed since the scan - the matched set is stale, re-scan');
+    reasons.push('the filters changed after the scan, so the list is out of date - scan again');
   }
 
-  // No completed scan at all: the controls do not exist, rather than existing
-  // and refusing.
-  if (job.status !== store.JOB_DONE && job.status !== store.JOB_PARTIAL) {
-    card.hidden = true;
-    return;
-  }
+  // The section is always visible so its place in the order is obvious, but the
+  // CONTROLS still do not render until a scan has completed in this session.
+  // Unchanged: this is the safety model, and the executor re-checks all of it
+  // regardless of what the panel shows.
   card.hidden = false;
 
+  if (job.status !== store.JOB_DONE && job.status !== store.JOB_PARTIAL) {
+    blocked.textContent =
+      'Scan first. Deleting is only offered for a list Surtr has just built, so ' +
+      'you can see exactly what would go.';
+    blocked.hidden = false;
+    body.hidden = true;
+    return;
+  }
+
   if (reasons.length) {
-    blocked.textContent = 'EXECUTION UNAVAILABLE: ' + reasons.join('; ') + '.';
+    blocked.textContent = 'Not available yet \u2014 ' + reasons.join('; ') + '.';
     blocked.hidden = false;
     body.hidden = true;
     return;
@@ -731,32 +784,20 @@ async function refreshExecute() {
   execPlanCount = matched.length;
   const sum = execute.summarise(matched);
   $('exec-summary').textContent =
-    sum.total + ' matched \u2014 ' + sum.byKind.post + ' posts, ' + sum.byKind.reply +
-    ' replies, ' + sum.byKind.retweet + ' retweets' +
-    (sum.oldest ? '. Oldest ' + sum.oldest.slice(0, 10) +
-      ', newest ' + sum.newest.slice(0, 10) : '') +
-    '. Deleting these cannot be undone.';
+    sum.total + ' items match: ' + sum.byKind.post + ' posts, ' + sum.byKind.reply +
+    ' replies, ' + sum.byKind.retweet + ' reposts' +
+    (sum.oldest ? ', from ' + sum.oldest.slice(0, 10) + ' to ' + sum.newest.slice(0, 10) : '') +
+    '.';
 
   // The 5 the test run would act on, shown BEFORE arming so they can be checked.
+  // The exact five the first run would act on, shown before anything is armed.
   const preview = execute.selectTestItems(matched);
   const tb = $('test-preview');
   tb.textContent = '';
-  for (const p of preview) {
-    const tr = document.createElement('tr');
-    const d = document.createElement('td');
-    d.className = 'num';
-    d.textContent = (p.createdAt || '').slice(0, 10);
-    const k = document.createElement('td');
-    k.className = 'kind';
-    k.textContent = p.kind;
-    const e = document.createElement('td');
-    e.className = 'num';
-    e.textContent = execute.engagementOf(p);
-    const t = document.createElement('td');
-    t.className = 'txt';
-    t.textContent = preview_text(p.text);
-    tr.append(d, k, e, t);
-    tb.append(tr);
+  if (preview.length === 0) {
+    placeholder(tb, 'Nothing to delete yet.');
+  } else {
+    for (const p of preview) tb.append(itemBlock(p));
   }
   $('btn-test').disabled = preview.length === 0;
 
@@ -768,9 +809,10 @@ async function refreshExecute() {
     // Two independent facts, and conflating them would be the same mistake as
     // "in bundle" vs "confirmed live": whether the queryId was FOUND, and
     // whether we know what a successful RESPONSE from it looks like.
+    // Same two facts, same distinction, inside Diagnostics where it belongs.
     const shapeNote = unconfirmedOps.includes(op)
-      ? '  \u2014 success shape UNCONFIRMED, outcomes will read as unverified'
-      : '  \u2014 success shape confirmed';
+      ? '  \u2014 replies not yet confirmed'
+      : '  \u2014 replies confirmed';
     setStatus($(id), Boolean(found),
       (found ? (w[op].confirmedLive ? found + '  [confirmed live]' : found + '  [in bundle]')
              : 'NOT FOUND - run Discover') + shapeNote);
@@ -781,14 +823,11 @@ async function refreshExecute() {
 
   const armed = $('exec-live').checked;
   const typed = $('exec-confirm').value.trim();
-  $('exec-mode').textContent = armed ? 'ARMED' : 'DRY RUN';
-  // The header badge used to promise "no deletion code exists in this build".
-  // That was true, and stopped being true, and a stale reassurance is worse
-  // than none - so it now reports the live state instead of a claim.
-  const badge = $('mode-badge');
-  badge.textContent = armed ? 'ARMED - CAN DELETE' : 'DRY RUN';
-  badge.style.color = armed ? 'var(--bad)' : '';
-  badge.style.borderColor = armed ? 'var(--bad)' : '';
+  // Shown in context, on the Delete section itself, rather than as a badge in
+  // the header that is either shouting or lying depending on the moment.
+  const mode = $('exec-mode');
+  mode.textContent = armed ? 'ARMED' : 'Not armed';
+  mode.className = armed ? 'chip armed' : 'chip';
   $('btn-execute').disabled =
     !armed || !verified || execPlanCount === 0 || String(execPlanCount) !== typed;
 }

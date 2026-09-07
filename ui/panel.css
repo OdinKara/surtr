@@ -1,33 +1,48 @@
-/* Surtr panel styling.
+/* Surtr side panel.
  *
- * Dark, because it sits beside x.com. The accent is ember orange rather than
- * X blue on purpose: this is not an X surface and should never be mistaken for
- * one. No X assets, logos, marks or icons are in this repo.
+ * Designed for ~380px. Nothing here may require horizontal scrolling: the
+ * matches list is how somebody checks what is about to be destroyed, so it is a
+ * safety surface and it has to be readable at the width it actually gets.
+ *
+ * COLOUR IS A SIGNAL, NOT DECORATION:
+ *   red    something is wrong, or is about to be irreversible
+ *   amber  a warning that changes what the results mean
+ *   green  a confirmed good outcome
+ *   grey   everything routine
+ * Routine information must never wear a warning colour. If everything looks
+ * urgent, nothing does, and the incompleteness warnings are the whole product.
  */
 
 :root {
-  --bg: #000000;
-  --surface: #16181c;
-  --surface-2: #1c1f23;
-  --line: #2f3336;
+  --bg: #0b0d10;
+  --surface: #14171b;
+  --surface-2: #1b1f24;
+  --line: #272c33;
+  --line-soft: #1f242a;
   --text: #e7e9ea;
-  --muted: #71767b;
-  --ember: #f0a626;
-  --ember-dim: #7a5512;
+  --muted: #8b949e;
+  --dim: #6b737c;
+
+  --accent: #f0a626;        /* Surtr's ember. Used sparingly. */
+  --accent-dim: #6b4a12;
   --good: #4ec9a5;
-  --bad: #e5484d;
   --warn: #d9a441;
+  --bad: #e5484d;
+
   --radius: 10px;
+  --gap: 10px;
+  --pad: 14px;
 }
 
 * { box-sizing: border-box; }
 
 body {
   margin: 0;
-  padding: 10px 10px 24px;
+  padding: 12px 12px 28px;
   background: var(--bg);
   color: var(--text);
-  font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  overflow-x: hidden;
 }
 
 /* ---------------------------------------------------------------- header */
@@ -37,34 +52,21 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 2px 2px 10px;
+  padding: 2px 2px 12px;
 }
-.brand { display: flex; align-items: center; gap: 8px; }
-.brand .mark { color: var(--ember); font-size: 15px; }
-.brand strong { display: block; font-size: 15px; letter-spacing: .3px; }
+.brand { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.brand .mark { color: var(--accent); font-size: 15px; flex: none; }
+.brand strong { display: block; font-size: 15px; letter-spacing: .2px; }
 .brand small { display: block; color: var(--muted); font-size: 11px; }
-
-.phase {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: .8px;
-  color: var(--ember);
-  border: 1px solid var(--ember-dim);
-  border-radius: 999px;
-  padding: 3px 8px;
-  white-space: nowrap;
-}
-
-
-.top-right { display: flex; align-items: center; gap: 8px; }
-.top-right a {
+.top a {
   display: inline-flex;
   align-items: center;
-  padding: 4px;
-  border-radius: 6px;
+  padding: 5px;
+  border-radius: 7px;
   line-height: 0;
+  flex: none;
 }
-.top-right a:hover { background: var(--surface-2); }
+.top a:hover { background: var(--surface-2); }
 
 /* ----------------------------------------------------------------- cards */
 
@@ -72,55 +74,64 @@ body {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  padding: 12px;
-  margin-bottom: 10px;
+  padding: var(--pad);
+  margin-bottom: 12px;
 }
-.card h2 {
-  margin: 0 0 8px;
-  font-size: 12px;
+.card > h2 {
+  margin: 0 0 10px;
+  font-size: 11px;
   font-weight: 700;
-  letter-spacing: .6px;
+  letter-spacing: .9px;
   text-transform: uppercase;
   color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
-.tag {
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 1px 7px;
-  font-size: 11px;
+.card h3 {
+  margin: 18px 0 6px;
+  font-size: 12.5px;
+  font-weight: 650;
   color: var(--text);
 }
-.hint { margin: 6px 0; color: var(--muted); font-size: 11.5px; }
+.card h3:first-child { margin-top: 0; }
 
-/* ---------------------------------------------------------------- status */
-
-dl.status {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 4px 10px;
-  margin: 0 0 10px;
-  font-size: 12px;
+/* One rhythm: lede introduces, hint qualifies, meta reports. */
+.lede { margin: 0 0 10px; color: var(--text); font-size: 12.5px; }
+.hint { margin: 6px 0 10px; color: var(--muted); font-size: 11.5px; }
+.meta {
+  margin: 8px 0 0;
+  color: var(--dim);
+  font-size: 11px;
+  font-family: ui-monospace, Consolas, monospace;
+  word-break: break-word;
 }
-dl.status dt { color: var(--muted); }
-dl.status dd { margin: 0; font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; }
-dd.ok { color: var(--good); }
-dd.bad { color: var(--bad); }
-dd.pending { color: var(--muted); }
 
-/* --------------------------------------------------------------- inputs */
+.tag, .chip {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--surface-2);
+  letter-spacing: .3px;
+}
+.chip.armed { color: var(--bad); border-color: var(--bad); }
+
+/* -------------------------------------------------------------- controls */
 
 label {
   display: block;
-  margin: 8px 0;
+  margin: 10px 0;
   font-size: 11.5px;
   color: var(--muted);
 }
 input[type="text"], input[type="number"], input[type="date"], select, textarea {
   display: block;
   width: 100%;
-  margin-top: 4px;
-  padding: 6px 8px;
+  margin-top: 5px;
+  padding: 7px 9px;
   background: var(--bg);
   color: var(--text);
   border: 1px solid var(--line);
@@ -131,104 +142,197 @@ input[type="text"], input[type="number"], input[type="date"], select, textarea {
 textarea { resize: vertical; font-family: ui-monospace, Consolas, monospace; }
 input:focus, select:focus, textarea:focus {
   outline: none;
-  border-color: var(--ember-dim);
+  border-color: var(--accent-dim);
 }
 
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
 
 fieldset {
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-soft);
   border-radius: 8px;
-  margin: 10px 0 0;
-  padding: 8px 10px 10px;
+  margin: 12px 0 0;
+  padding: 4px 12px 12px;
 }
-legend { color: var(--muted); font-size: 11px; padding: 0 4px; }
-.veto-tag {
-  color: var(--bad);
-  border: 1px solid var(--bad);
-  border-radius: 999px;
-  padding: 0 5px;
-  font-size: 9px;
-  letter-spacing: .5px;
-  text-transform: uppercase;
-}
+legend { color: var(--muted); font-size: 11px; padding: 0 5px; }
+fieldset.keep { border-color: var(--line); }
+
 label.chk {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  margin: 4px 12px 4px 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 8px 0;
   color: var(--text);
   font-size: 12px;
+  line-height: 1.4;
 }
-label.chk input { margin: 0; accent-color: var(--ember); }
+label.chk input { margin: 2px 0 0; accent-color: var(--accent); flex: none; }
 
-/* -------------------------------------------------------------- buttons */
+/* --------------------------------------------------------------- buttons */
 
-.row { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 0; }
 button {
-  padding: 7px 12px;
+  padding: 8px 13px;
   border-radius: 8px;
   border: 1px solid var(--line);
   background: var(--surface-2);
   color: var(--text);
   font: inherit;
   font-size: 12px;
+  font-weight: 550;
   cursor: pointer;
 }
 button:hover:not(:disabled) { border-color: var(--muted); }
-button:disabled { opacity: .45; cursor: default; }
+button:disabled { opacity: .4; cursor: default; }
+
+/* The ordinary primary action: scanning is safe. */
 button.primary {
-  background: var(--ember);
-  border-color: var(--ember);
-  color: #17110333;
-  color: #1a1206;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #17110a;
   font-weight: 700;
 }
-button.ghost { background: transparent; }
+/* The irreversible one. Deliberately heavier than anything else on screen. */
+button.danger {
+  background: var(--bad);
+  border-color: var(--bad);
+  color: #1a0708;
+  font-weight: 800;
+  letter-spacing: .2px;
+  padding: 10px 14px;
+}
+button.danger:disabled { background: transparent; color: var(--bad); }
+button.ghost { background: transparent; color: var(--muted); }
+button.ghost:hover:not(:disabled) { color: var(--text); }
 
-/* ------------------------------------------------------------- counters */
+/* ------------------------------------------------------------- diagnostics */
+
+summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 11.5px;
+  padding: 4px 0;
+}
+summary:hover { color: var(--text); }
+details > summary { list-style: revert; }
+#diagnostics { margin-top: 12px; border-top: 1px solid var(--line-soft); padding-top: 6px; }
+#manual-wrap { margin-top: 10px; }
+
+dl.status {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 5px 10px;
+  margin: 4px 0 10px;
+  font-size: 11.5px;
+}
+dl.status dt { color: var(--muted); white-space: nowrap; }
+dl.status dd {
+  margin: 0;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11px;
+  word-break: break-all;
+}
+dd.ok { color: var(--good); }
+dd.bad { color: var(--bad); }
+dd.pending { color: var(--dim); }
+
+/* Connection summary: a state, not a diagnostic. */
+#conn-summary { display: flex; align-items: baseline; gap: 8px; }
+#conn-summary::before {
+  content: "";
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--dim);
+  flex: none;
+  transform: translateY(-1px);
+}
+#conn-summary.ready::before { background: var(--good); }
+#conn-summary.notready::before { background: var(--warn); }
+#conn-summary.error::before { background: var(--bad); }
+
+/* -------------------------------------------------------------- counters */
 
 .counters {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 8px;
-  margin: 12px 0 8px;
+  gap: 6px;
+  margin: 14px 0 4px;
   text-align: center;
 }
 .counters div {
   background: var(--surface-2);
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-soft);
   border-radius: 8px;
-  padding: 8px 4px;
+  padding: 8px 2px;
+  min-width: 0;
 }
-.counters span { display: block; font-size: 17px; font-variant-numeric: tabular-nums; }
-.counters small { display: block; color: var(--muted); font-size: 10px; }
+.counters span {
+  display: block;
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+.counters small {
+  display: block;
+  color: var(--muted);
+  font-size: 9.5px;
+  line-height: 1.25;
+  margin-top: 2px;
+}
 .good { color: var(--good); }
 
-/* ----------------------------------------------------------------- rate */
+/* ------------------------------------------------------------------ rate */
 
-.rate { margin-top: 6px; }
+.rate { margin-top: 12px; }
 .meter {
-  height: 5px;
+  height: 4px;
   background: var(--surface-2);
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-soft);
   border-radius: 999px;
   overflow: hidden;
 }
-.meter > div { height: 100%; width: 0; background: var(--ember); transition: width .25s; }
-#rate-text { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; }
+.meter > div { height: 100%; width: 0; background: var(--accent); transition: width .25s; }
+#rate-text { display: block; margin-top: 6px; color: var(--dim); font-size: 10.5px; }
 
-.termination {
+/* -------------------------------------------------------------- messages */
+
+.banner {
   margin: 10px 0 0;
-  padding: 8px 10px;
+  padding: 9px 11px;
   border-left: 3px solid var(--warn);
   background: var(--surface-2);
   border-radius: 0 8px 8px 0;
+  color: var(--warn);
   font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.45;
+  word-break: break-word;
 }
+.banner.bad { border-left-color: var(--bad); color: var(--bad); }
+.banner.waiting {
+  border-left-color: var(--accent);
+  color: var(--accent);
+  animation: surtr-pulse 1.6s ease-in-out infinite;
+}
+@keyframes surtr-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
+@media (prefers-reduced-motion: reduce) { .banner.waiting { animation: none; } }
+
+/* A per-stream report is information, not a warning: grey by default. */
+.termination {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border-left: 3px solid var(--line);
+  background: var(--surface-2);
+  border-radius: 0 8px 8px 0;
+  font-size: 11.5px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+.termination.failed { border-left-color: var(--bad); color: var(--bad); }
+.termination.skipped { border-left-color: var(--warn); color: var(--warn); }
+
 .error {
   margin: 10px 0 0;
-  padding: 8px 10px;
+  padding: 9px 11px;
   border-left: 3px solid var(--bad);
   background: var(--surface-2);
   border-radius: 0 8px 8px 0;
@@ -237,89 +341,105 @@ button.ghost { background: transparent; }
   word-break: break-word;
 }
 
+/* --------------------------------------------------------------- results */
 
-/* A stream that was skipped, or a cross-stream duplicate, has to be visible at
- * a glance - not something you only find by opening the exported file. Same
- * weight as any other reason a run is incomplete. */
-.banner {
-  margin: 10px 0 0;
+/* A list, not a table. Six columns cannot be read at 380px, and the text
+ * preview is the column that matters most - it is how somebody recognises a
+ * post they do not want to lose. */
+.results {
+  margin-top: 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  max-height: 340px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.results.compact { max-height: 190px; }
+
+.item {
   padding: 8px 10px;
-  border-left: 3px solid var(--warn);
-  background: var(--surface-2);
-  border-radius: 0 8px 8px 0;
-  color: var(--warn);
-  font-size: 11.5px;
-  font-weight: 600;
+  border-bottom: 1px solid var(--line-soft);
 }
-.banner.bad { border-left-color: var(--bad); color: var(--bad); }
-#stream-reports .termination { margin-top: 8px; }
-#stream-reports .termination.failed { border-left-color: var(--bad); }
-#stream-reports .termination.skipped { border-left-color: var(--muted); }
+.item:last-child { border-bottom: none; }
 
-
-/* A stream sleeping out a rate limit must never look like a hung one. The
- * countdown ticks and the row pulses, so "working" and "dead" are visibly
- * different states. */
-.banner.waiting {
-  border-left-color: var(--ember);
-  color: var(--ember);
-  animation: surtr-pulse 1.6s ease-in-out infinite;
+.item-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 10.5px;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
 }
-@keyframes surtr-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
-@media (prefers-reduced-motion: reduce) {
-  .banner.waiting { animation: none; }
-}
-
-/* -------------------------------------------------------------- results */
-
-.tablewrap { max-height: 320px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
-table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
-thead th {
-  position: sticky;
-  top: 0;
-  background: var(--surface-2);
+.item-kind {
   color: var(--muted);
-  text-align: left;
-  font-weight: 600;
-  padding: 6px 7px;
-  border-bottom: 1px solid var(--line);
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  font-size: 9.5px;
+  font-weight: 700;
 }
-tbody td { padding: 6px 7px; border-bottom: 1px solid var(--line); vertical-align: top; }
-tbody tr:last-child td { border-bottom: none; }
-tbody tr.empty td { color: var(--muted); text-align: center; padding: 16px; }
-td.txt { max-width: 1px; color: var(--text); }
-td.num { font-variant-numeric: tabular-nums; color: var(--muted); }
-td.kind { color: var(--muted); }
-a { color: var(--ember); text-decoration: none; }
+.item-stats { margin-left: auto; white-space: nowrap; }
+.item-link { flex: none; }
+
+.item-text {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text);
+  line-height: 1.45;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.item-text.empty { color: var(--dim); font-style: italic; }
+
+.results .placeholder {
+  padding: 18px 12px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
-/* ------------------------------------------------------------------ log */
+/* ----------------------------------------------------------------- steps */
+
+.step {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+.step h3 { margin-top: 0; }
+
+/* ------------------------------------------------------------------- log */
 
 .log {
-  max-height: 200px;
+  max-height: 220px;
   overflow: auto;
   margin: 8px 0 0;
-  padding: 8px;
+  padding: 9px;
   background: var(--bg);
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-soft);
   border-radius: 8px;
   font-family: ui-monospace, Consolas, monospace;
   font-size: 10.5px;
-  line-height: 1.5;
+  line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;
   color: var(--muted);
 }
-summary { cursor: pointer; color: var(--muted); font-size: 11.5px; }
 
-/* --------------------------------------------------------------- footer */
+/* ---------------------------------------------------------------- footer */
 
 .foot {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 4px 2px;
-  color: var(--muted);
+  justify-content: center;
+  padding: 6px 2px;
+  color: var(--dim);
   font-size: 10.5px;
 }
-.foot a { display: inline-flex; padding: 4px; border-radius: 6px; }

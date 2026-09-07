@@ -1828,3 +1828,45 @@ original post no longer exists.
 Reposts tab is now empty.
 
 Suite: parser 69, streams 63, execute 206, build 27, filters 23.
+
+### 2026-09-06 — UI pass for public release
+
+Presentation only. `git diff` touched `ui/panel.html`, `ui/panel.css` and
+`ui/panel.js` and nothing else: no gate, grade, threshold or check was altered,
+and `lib/` and `content/` are byte-identical.
+
+- **Five sections**: Connection, Filters, Scan, Delete, Activity log.
+- **Diagnostics collapsed** inside Connection - build fingerprint, query ids,
+  "in bundle" / "confirmed live", operation names, manual override, all present
+  and unchanged, just not the first thing anybody sees. The visible connection
+  line is a plain ready / not-ready state.
+- **The header badge is gone.** The armed state is shown on the Delete section
+  itself, where it is in context rather than either shouting or lying.
+- **The 5-item flow is intact and recast**, not weakened: same button, same
+  preview of exactly which five, same attestation checkbox, same lock on the
+  full run. It reads as "Start with 5 - the careful way to begin" rather than
+  as a test harness.
+- **The matches list is a list, not a table.** Six columns could not be read at
+  380px; the text was cut off and needed horizontal scrolling. It is a safety
+  surface - it is how somebody recognises a post they did not mean to lose - so
+  it now shows date, kind, engagement, a link and a wrapped three-line preview
+  with no horizontal scroll at all. Same treatment for the five-item preview.
+- **Colour means something now**: red for wrong or irreversible, amber for a
+  warning that changes what the results mean, green for confirmed good, grey for
+  routine. Per-stream reports were amber and are now grey - they are
+  information, and everything looking urgent is the same as nothing looking
+  urgent.
+- **Empty states everywhere**, saying what to do first.
+- Every incompleteness banner, the kill-log reminder and all counters
+  (deferred and unverified-ok included) are untouched in substance.
+
+The Delete section is now VISIBLE before a scan rather than absent, but its
+controls still do not render - the copy explains why instead of the section
+silently not existing.
+
+Verified in a loaded panel at 380px: five sections in order, diagnostics
+collapsed with all ten rows inside, Delete inert before a scan, the five-item
+preview listing exactly five, the full run locked until armed AND counted AND
+attested, a wrong count re-locking it, and zero horizontal overflow.
+
+Suite: parser 69, streams 63, execute 206, build 27, filters 23.

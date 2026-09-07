@@ -12,79 +12,96 @@
     <span class="mark" aria-hidden="true">&#9650;</span>
     <span>
       <strong>Surtr</strong>
-      <small>Bulk X Post Removal</small>
+      <small>Bulk X post removal</small>
     </span>
   </div>
-  <div class="top-right">
-    <span class="phase" id="mode-badge" title="Deletion is possible in this build. Surtr opens in dry-run every time.">DRY RUN</span>
-    <a id="donate" href="https://donate.grimnirworks.com/"
-       target="_blank" rel="noopener noreferrer"
-       title="Support GrimnirWorks" aria-label="Support GrimnirWorks">
-      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
-           fill="#e5484d" stroke="#e5484d" stroke-width="2" stroke-linecap="round"
-           stroke-linejoin="round" aria-hidden="true">
-        <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"></path>
-      </svg>
-    </a>
-  </div>
+  <a id="donate" href="https://donate.grimnirworks.com/"
+     target="_blank" rel="noopener noreferrer"
+     title="Support GrimnirWorks" aria-label="Support GrimnirWorks">
+    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+         fill="#e5484d" stroke="#e5484d" stroke-width="2" stroke-linecap="round"
+         stroke-linejoin="round" aria-hidden="true">
+      <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"></path>
+    </svg>
+  </a>
 </header>
 
-<!-- Connection ---------------------------------------------------------- -->
+<!-- 1. CONNECTION ======================================================== -->
 <section class="card">
   <h2>Connection</h2>
-  <dl class="status">
-    <dt>Build</dt><dd id="st-build" class="pending">computing...</dd>
-    <dt>x.com tab</dt><dd id="st-tab" class="pending">not checked</dd>
-    <dt>Bearer token</dt><dd id="st-bearer" class="pending">not discovered</dd>
-    <dt>UserByScreenName</dt><dd id="st-q1" class="pending">not found</dd>
-    <dt>Posts op</dt><dd id="st-posts" class="pending">not found</dd>
-    <dt>Reposts op</dt><dd id="st-reposts" class="pending">not found</dd>
-    <dt>Replies op</dt><dd id="st-replies" class="pending">not found</dd>
-    <dt>Also in bundle</dt><dd id="st-alt" class="pending">&mdash;</dd>
-  </dl>
-  <p class="hint">
-    "in bundle" means the query id was found in X's JavaScript, which is NOT
-    proof the site still serves that operation. Only a request that comes back
-    upgrades it to "confirmed live".
-  </p>
+
+  <p class="lede" id="conn-summary">Checking&hellip;</p>
+
   <div class="row">
-    <button id="btn-discover" type="button">Discover</button>
-    <button id="btn-rediscover" type="button" class="ghost">Force rediscover</button>
+    <button id="btn-discover" type="button">Connect</button>
   </div>
 
-  <details id="manual-wrap">
-    <summary>Manual override</summary>
+  <details id="diagnostics">
+    <summary>Diagnostics</summary>
     <p class="hint">
-      Only needed if discovery fails. Surtr will never fall back to a remembered
-      id on its own - a stale queryId fails as a 404 that looks like your posts
-      are missing, so it asks instead of guessing.
+      Only needed if something stops working. X renames the calls it uses from
+      time to time, and this is where that shows up.
     </p>
-    <label>Bearer token
-      <input id="m-bearer" type="text" spellcheck="false" placeholder="AAAAAAAA...">
-    </label>
-    <label>UserByScreenName queryId
-      <input id="m-q1" type="text" spellcheck="false">
-    </label>
-    <label>Posts operation name
-      <input id="m-op" type="text" spellcheck="false" placeholder="UserOriginalsTimeline">
-    </label>
-    <label>Posts queryId
-      <input id="m-q2" type="text" spellcheck="false">
-    </label>
-    <label>Reposts operation name
-      <input id="m-op2" type="text" spellcheck="false" placeholder="UserRepostsTimeline">
-    </label>
-    <label>Reposts queryId
-      <input id="m-q3" type="text" spellcheck="false">
-    </label>
-    <button id="btn-manual" type="button" class="ghost">Apply override</button>
+
+    <dl class="status">
+      <dt>Build</dt><dd id="st-build" class="pending">&hellip;</dd>
+      <dt>x.com tab</dt><dd id="st-tab" class="pending">not checked</dd>
+      <dt>Access token</dt><dd id="st-bearer" class="pending">not found</dd>
+      <dt>Account lookup</dt><dd id="st-q1" class="pending">not found</dd>
+      <dt>Posts</dt><dd id="st-posts" class="pending">not found</dd>
+      <dt>Reposts</dt><dd id="st-reposts" class="pending">not found</dd>
+      <dt>Replies</dt><dd id="st-replies" class="pending">not found</dd>
+      <dt>Also available</dt><dd id="st-alt" class="pending">&mdash;</dd>
+      <dt>Delete post</dt><dd id="st-del-tweet" class="pending">not found</dd>
+      <dt>Undo repost</dt><dd id="st-del-retweet" class="pending">not found</dd>
+    </dl>
+
+    <p class="hint">
+      &ldquo;In bundle&rdquo; means the call was found in X&rsquo;s code.
+      &ldquo;Confirmed live&rdquo; means it has actually answered.
+    </p>
+
+    <div class="row">
+      <button id="btn-rediscover" type="button" class="ghost">Look again</button>
+    </div>
+
+    <details id="manual-wrap">
+      <summary>Enter values by hand</summary>
+      <p class="hint">
+        Only if the automatic lookup fails. Surtr will not quietly fall back to
+        a remembered value &mdash; a stale one fails in a way that looks like
+        your posts are missing.
+      </p>
+      <label>Access token
+        <input id="m-bearer" type="text" spellcheck="false" placeholder="AAAAAAAA...">
+      </label>
+      <label>Account lookup id
+        <input id="m-q1" type="text" spellcheck="false">
+      </label>
+      <label>Posts call name
+        <input id="m-op" type="text" spellcheck="false" placeholder="UserOriginalsTimeline">
+      </label>
+      <label>Posts call id
+        <input id="m-q2" type="text" spellcheck="false">
+      </label>
+      <label>Reposts call name
+        <input id="m-op2" type="text" spellcheck="false" placeholder="UserRepostsTimeline">
+      </label>
+      <label>Reposts call id
+        <input id="m-q3" type="text" spellcheck="false">
+      </label>
+      <button id="btn-manual" type="button" class="ghost">Use these</button>
+    </details>
   </details>
 </section>
 
-<!-- Filters ------------------------------------------------------------- -->
+<!-- 2. FILTERS ========================================================== -->
 <section class="card">
   <h2>Filters</h2>
-  <p class="hint">All filters combine with AND. Blank means "no filter".</p>
+  <p class="lede">
+    Choose what to look for. Leave a box empty to ignore it. Everything you set
+    has to be true for an item to match.
+  </p>
 
   <div class="grid2">
     <label>Posted before
@@ -93,195 +110,190 @@
     <label>Posted after
       <input id="f-after" type="date">
     </label>
-    <label>Max likes
+    <label>At most this many likes
       <input id="f-maxlikes" type="number" min="0" placeholder="any">
     </label>
-    <label>Min likes
+    <label>At least this many likes
       <input id="f-minlikes" type="number" min="0" placeholder="any">
     </label>
-    <label>Max retweets
+    <label>At most this many reposts
       <input id="f-maxrts" type="number" min="0" placeholder="any">
     </label>
-    <label>Media
+    <label>Pictures or video
       <select id="f-media">
-        <option value="">any</option>
-        <option value="true">has media</option>
-        <option value="false">no media</option>
+        <option value="">either</option>
+        <option value="true">only with</option>
+        <option value="false">only without</option>
       </select>
     </label>
   </div>
 
-  <fieldset class="kinds">
-    <legend>Kinds</legend>
-    <label class="chk"><input id="k-post" type="checkbox" checked> posts</label>
-    <label class="chk"><input id="k-reply" type="checkbox" checked> replies</label>
-    <label class="chk"><input id="k-retweet" type="checkbox" checked> retweets</label>
+  <fieldset>
+    <legend>Kinds of item</legend>
+    <label class="chk"><input id="k-post" type="checkbox" checked> Posts</label>
+    <label class="chk"><input id="k-reply" type="checkbox" checked> Replies</label>
+    <label class="chk"><input id="k-retweet" type="checkbox" checked> Reposts</label>
   </fieldset>
 
-  <label>Text contains any of
-    <input id="f-contains" type="text" spellcheck="false" placeholder="space separated">
+  <label>Text contains any of these words
+    <input id="f-contains" type="text" spellcheck="false" placeholder="separate with spaces">
   </label>
-  <label>Text contains none of
-    <input id="f-excludes" type="text" spellcheck="false" placeholder="space separated">
+  <label>Text contains none of these words
+    <input id="f-excludes" type="text" spellcheck="false" placeholder="separate with spaces">
   </label>
 
-  <fieldset class="vetoes">
-    <legend>Never touch <span class="veto-tag">veto</span></legend>
-    <label class="chk"><input id="v-pinned" type="checkbox" checked> exclude pinned post</label>
-    <label>Keep these post ids
+  <fieldset class="keep">
+    <legend>Always keep</legend>
+    <label class="chk"><input id="v-pinned" type="checkbox" checked> My pinned post</label>
+    <label>Specific posts, by id
       <textarea id="v-keep" rows="2" spellcheck="false"
-                placeholder="one id per line, or comma separated"></textarea>
+                placeholder="one per line"></textarea>
     </label>
     <p class="hint">
-      These two are applied last and cannot be overridden by anything above.
-      For a retweet, keeping the original id also keeps your retweet of it.
+      These are checked last and nothing above can override them. Keeping an
+      original also keeps your repost of it.
     </p>
   </fieldset>
 </section>
 
-<!-- Scan ---------------------------------------------------------------- -->
+<!-- 3. SCAN ============================================================= -->
 <section class="card">
   <h2>Scan</h2>
+  <p class="lede">
+    Surtr reads your posts, replies and reposts and shows you what matches.
+    Scanning changes nothing.
+  </p>
+
   <div class="row">
-    <button id="btn-scan" type="button" class="primary">Start dry-run scan</button>
+    <button id="btn-scan" type="button" class="primary">Scan my account</button>
     <button id="btn-stop" type="button" class="ghost" disabled>Stop</button>
-    <button id="btn-reset" type="button" class="ghost">Clear results</button>
+    <button id="btn-reset" type="button" class="ghost">Clear</button>
   </div>
 
   <div class="counters">
-    <div><span id="c-enum">0</span><small>enumerated</small></div>
-    <div><span id="c-match" class="good">0</span><small>matched</small></div>
-    <div><span id="c-excl">0</span><small>excluded</small></div>
-    <div><span id="c-pages">0</span><small>pages</small></div>
+    <div><span id="c-enum">0</span><small>found</small></div>
+    <div><span id="c-match" class="good">0</span><small>match</small></div>
+    <div><span id="c-excl">0</span><small>filtered out</small></div>
+    <div><span id="c-pages">0</span><small>pages read</small></div>
   </div>
 
-  <p id="stream-line" class="hint" hidden></p>
-  <p id="rate-wait" class="banner waiting" hidden></p>
+  <p id="stream-line" class="meta" hidden></p>
 
   <div class="rate">
     <div class="meter"><div id="rate-bar"></div></div>
-    <small id="rate-text">rate limit: not observed yet</small>
+    <small id="rate-text">Not started</small>
   </div>
 
+  <p id="rate-wait" class="banner waiting" hidden></p>
   <p id="shortfall" class="banner bad" hidden></p>
   <p id="stream-skipped" class="banner" hidden></p>
-  <p id="dupes" class="banner" hidden></p>
-  <p id="overlap" class="hint" hidden></p>
+  <p id="dupes" class="banner bad" hidden></p>
+  <p id="overlap" class="meta" hidden></p>
   <div id="stream-reports"></div>
-  <p id="skipped" class="hint" hidden></p>
+  <p id="skipped" class="meta" hidden></p>
   <p id="scan-error" class="error" hidden></p>
-</section>
 
-<!-- Results ------------------------------------------------------------- -->
-<section class="card">
-  <h2>Matched <span id="res-count" class="tag">0</span></h2>
+  <h3>Matches <span id="res-count" class="tag">0</span></h3>
   <p class="hint">
-    Everything listed here is what a future execution phase would act on.
-    Spot-check it before that phase exists.
+    Read this before deleting anything. It is exactly what would be removed.
   </p>
-  <div class="row">
-    <button id="btn-json" type="button" class="ghost">Export JSON</button>
-    <button id="btn-csv" type="button" class="ghost">Export CSV</button>
-  </div>
-  <div class="tablewrap">
-    <table id="results">
-      <thead>
-        <tr><th>Date</th><th>Kind</th><th>&#9829;</th><th>RT</th><th>Text</th><th></th></tr>
-      </thead>
-      <tbody id="results-body">
-        <tr class="empty"><td colspan="6">No scan has run yet.</td></tr>
-      </tbody>
-    </table>
-  </div>
+  <div id="results-body" class="results"></div>
   <p id="res-more" class="hint" hidden></p>
+
+  <div class="row">
+    <button id="btn-json" type="button" class="ghost">Save list (JSON)</button>
+    <button id="btn-csv" type="button" class="ghost">Save list (CSV)</button>
+  </div>
 </section>
 
-<!-- Execute -------------------------------------------------------------- -->
-<section class="card" id="exec-card" hidden>
-  <h2>Execute <span class="phase" id="exec-mode">DRY RUN</span></h2>
+<!-- 4. DELETE =========================================================== -->
+<section class="card" id="exec-card">
+  <h2>Delete <span class="chip" id="exec-mode">Not armed</span></h2>
 
-  <p id="exec-blocked" class="banner bad" hidden></p>
+  <p id="exec-blocked" class="lede" hidden></p>
 
   <div id="exec-body" hidden>
     <p class="banner bad">
-      DELETION IS PERMANENT. Nothing here can be undone, by this tool or by X.
-      The kill log is the only record of what is destroyed - download it.
+      Deleting is permanent. Neither Surtr nor X can undo it.
     </p>
 
-    <dl class="status">
-      <dt>DeleteTweet</dt><dd id="st-del-tweet" class="pending">not found</dd>
-      <dt>DeleteRetweet</dt><dd id="st-del-retweet" class="pending">not found</dd>
-    </dl>
+    <p id="exec-summary" class="lede"></p>
 
-    <p id="exec-summary" class="hint"></p>
-
-    <fieldset>
-      <legend>Test run <span class="veto-tag">first</span></legend>
+    <div class="step">
+      <h3>1. Start with 5</h3>
       <p class="hint">
-        Acts on the 5 lowest-engagement, oldest matched items and then stops,
-        whatever the set size. Run this first and check by hand that exactly
-        those 5 are gone. Full runs stay locked until you confirm it.
+        Delete five items first and check they are gone. It is the careful way
+        to begin, and it takes a minute.
       </p>
-      <div class="tablewrap" style="max-height:150px">
-        <table><tbody id="test-preview"></tbody></table>
-      </div>
+      <div id="test-preview" class="results compact"></div>
       <div class="row">
-        <button id="btn-test" type="button">Run the 5-item test</button>
+        <button id="btn-test" type="button">Delete these 5</button>
       </div>
       <label class="chk">
         <input id="test-verified" type="checkbox">
-        I checked by hand: exactly those items are gone, and nothing else
+        I checked &mdash; those five are gone and nothing else is
       </label>
-    </fieldset>
+    </div>
 
-    <fieldset>
-      <legend>Full run <span class="veto-tag">irreversible</span></legend>
+    <div class="step">
+      <h3>2. Delete the rest</h3>
       <label class="chk">
-        <input id="exec-live" type="checkbox"> Leave dry-run and arm this run
+        <input id="exec-live" type="checkbox"> Yes, delete for real
       </label>
-      <label>Type the exact number of items to confirm
+      <label>Type the number of items to confirm
         <input id="exec-confirm" type="text" inputmode="numeric" spellcheck="false"
                placeholder="e.g. 898">
       </label>
       <div class="row">
-        <button id="btn-execute" type="button" class="primary" disabled>
-          Delete the matched set
+        <button id="btn-execute" type="button" class="danger" disabled>
+          Delete everything that matches
         </button>
         <button id="btn-exec-stop" type="button" class="ghost" disabled>Stop</button>
       </div>
-    </fieldset>
+    </div>
 
     <div class="counters">
-      <div><span id="x-done">0</span><small>dispatched</small></div>
+      <div><span id="x-done">0</span><small>attempted</small></div>
       <div><span id="x-ok" class="good">0</span><small>deleted</small></div>
-      <div><span id="x-deferred">0</span><small>deferred</small></div>
-      <div><span id="x-fail">0</span><small>failed</small></div>
+      <div><span id="x-deferred">0</span><small>left for later</small></div>
+      <div><span id="x-fail">0</span><small>problems</small></div>
     </div>
-    <p id="exec-status" class="hint" hidden></p>
+
+    <p id="exec-status" class="meta" hidden></p>
     <p id="exec-aborted" class="banner bad" hidden></p>
     <p id="exec-deferred" class="banner" hidden></p>
     <p id="exec-unverified-ok" class="banner" hidden></p>
     <p id="exec-unverified" class="banner" hidden></p>
 
+    <h3>Record of what was deleted</h3>
     <p id="killlog-reminder" class="banner bad" hidden></p>
+    <p class="hint">
+      Surtr keeps the full text of everything it deletes, and never saves it
+      anywhere unless you ask.
+    </p>
     <div class="row">
-      <button id="btn-kill-json" type="button" class="ghost">Download kill log (JSON)</button>
-      <button id="btn-kill-csv" type="button" class="ghost">Download kill log (CSV)</button>
+      <button id="btn-kill-json" type="button" class="ghost">Save record (JSON)</button>
+      <button id="btn-kill-csv" type="button" class="ghost">Save record (CSV)</button>
     </div>
   </div>
 </section>
 
-<!-- Log ----------------------------------------------------------------- -->
+<!-- 5. ACTIVITY LOG ===================================================== -->
 <section class="card">
+  <h2>Activity log</h2>
   <details>
-    <summary>Activity log</summary>
+    <summary>Show what Surtr has been doing</summary>
     <pre id="log" class="log"></pre>
   </details>
 </section>
 
 <footer class="foot">
-  <span>Surtr &middot; GrimnirWorks &middot; AGPLv3</span>
+  <span>Surtr &middot; GrimnirWorks &middot; AGPL-3.0</span>
 </footer>
+
+<!-- Kept so the armed-state code has somewhere to write; the loud header badge
+     it used to drive is gone. The Delete section shows the state in context. -->
+<span id="mode-badge" hidden></span>
 
 <script type="module" src="panel.js"></script>
 </body>
