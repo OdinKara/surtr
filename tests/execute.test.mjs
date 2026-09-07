@@ -91,6 +91,63 @@ ok(E.isPlausibleId('1234567890') && !E.isPlausibleId('12') &&
    !E.isPlausibleId('12a4567890') && !E.isPlausibleId(1234567890),
    'id plausibility rejects short, non-numeric and non-string values');
 
+/* -------------------------------------------- REQUEST VARIABLES --- */
+
+{
+  // The 422 that produced this test:
+  //   {"errors":[{"code":"GRAPHQL_VALIDATION_FAILED","message":"must be defined",
+  //               "path":["variable","source_tweet_id"]}]}
+  // Verb selection and target were both correct; a shared builder sent
+  // DeleteTweet's key name on a DeleteRetweet request.
+
+  const dt = E.variablesFor('DeleteTweet', MY_POST);
+  ok(dt.tweet_id === MY_POST, 'DeleteTweet sends tweet_id');
+  ok(dt.dark_request === false, 'DeleteTweet still sends dark_request - proven shape, untouched');
+  ok(!('source_tweet_id' in dt), 'DeleteTweet does NOT send source_tweet_id');
+  ok(Object.keys(dt).sort().join(',') === 'dark_request,tweet_id',
+     'DeleteTweet sends exactly the two keys that are known to work: ' +
+     Object.keys(dt).sort().join(','));
+
+  const dr = E.variablesFor('DeleteRetweet', FOREIGN_ORIGINAL);
+  ok(dr.source_tweet_id === FOREIGN_ORIGINAL,
+     'DeleteRetweet sends source_tweet_id, the key X named in its own error');
+  ok(!('tweet_id' in dr),
+     'THE BUG: DeleteRetweet must NOT send tweet_id - that inheritance caused the 422');
+  ok(Object.keys(dr).join(',') === 'source_tweet_id',
+     'DeleteRetweet sends ONLY source_tweet_id - dark_request is not assumed from ' +
+     'DeleteTweet, because the bundle could not confirm it and the next 422 will ' +
+     'name it if it is needed: ' + Object.keys(dr).join(','));
+
+  // The shapes must not be the same function, or they can drift into each other.
+  ok(E.WRITE_VARIABLES.DeleteTweet !== E.WRITE_VARIABLES.DeleteRetweet,
+     'the two operations have SEPARATE builders - there is nothing to inherit from');
+
+  const keysA = Object.keys(E.variablesFor('DeleteTweet', '1'));
+  const keysB = Object.keys(E.variablesFor('DeleteRetweet', '1'));
+  ok(keysA.every((k) => !keysB.includes(k)),
+     'and their key sets do not overlap at all');
+
+  // An operation with no shape must not be dispatched with a guessed one.
+  let threw = false;
+  try { E.variablesFor('SomeNewDeleteOperation', '1'); } catch { threw = true; }
+  ok(threw, 'an unknown operation THROWS rather than returning a plausible shape - a ' +
+     'write with guessed variables is worse than a write that does not happen');
+
+  threw = false;
+  try { E.variablesFor(undefined, '1'); } catch { threw = true; }
+  ok(threw, 'and so does a missing operation name');
+
+  // Every operation planItem can emit must have a shape.
+  for (const op of Object.values(E.WRITE_OPERATIONS)) {
+    ok(typeof E.WRITE_VARIABLES[op] === 'function',
+       'every write operation has its own variables shape: ' + op);
+  }
+
+  // The target flows through untouched.
+  ok(E.variablesFor('DeleteRetweet', '669425844394270721').source_tweet_id ===
+     '669425844394270721', 'the target id is passed through verbatim');
+}
+
 /* ------------------------------------------- VETOES AT DISPATCH TIME --- */
 
 {

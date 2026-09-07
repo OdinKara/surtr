@@ -531,6 +531,69 @@ once per session. Everything else - both report downloads, the donate link, the
 test attestation write - is behind a user click, which is where an action with a
 side effect belongs.
 
+### DeleteRetweet: a shared variables builder sent the wrong key
+
+The first live retweet attempt returned:
+
+```
+HTTP 422
+{"errors":[{"code":"GRAPHQL_VALIDATION_FAILED",
+            "message":"must be defined",
+            "path":["variable","source_tweet_id"]}]}
+```
+
+**Verb selection and target resolution were both correct.** `sourceTweetId`
+resolved to the original post and `targetId` matched it exactly - the part with
+the potential to act on somebody else's tweet did its job. The request failed
+purely because both operations were dispatched through **one shared variables
+builder** sending `{ tweet_id, dark_request }`, which is right for DeleteTweet
+and wrong for DeleteRetweet.
+
+That is the instructive part. A shared builder makes this class of mistake
+invisible: the call site reads correctly, the target is right, and the wrong
+thing goes out anyway. Each operation now has its **own explicit entry** in
+`WRITE_VARIABLES` and there is no shared path, so one cannot inherit another's
+key names. A test asserts the two builders are different functions and that
+their key sets do not overlap at all.
+
+`variablesFor()` throws on an unknown operation rather than returning something
+plausible: a write with guessed variables is worse than a write that does not
+happen.
+
+**DeleteRetweet sends ONLY `source_tweet_id`.** DeleteTweet also takes
+`dark_request` and it would be reasonable to assume this does too - but
+reasonable is not the standard for an irreversible call, and the bundle could
+not settle it: every JS asset reachable without a logged-in session contains
+zero occurrences of `DeleteRetweet`, `source_tweet_id` or `dark_request`
+(checked, not assumed). So the rule is one variable per iteration, each one
+named by X's own validation error, never blind. If another is required the next
+422 will name it exactly as this one did.
+
+**DeleteRetweet's SUCCESS shape is still unknown.** A 422 says what the request
+was missing; it says nothing about what a success looks like. It stays out of
+`CONFIRMED_SUCCESS_SHAPES` until a live success is captured.
+
+### Two things that worked, worth recording
+
+**The run stopped after one failed item** instead of dispatching all five with
+the same broken request. The `exec.done === 0` check treats a first-item failure
+as "we do not understand this endpoint yet" and ends the run with the full
+request and raw body logged. Four requests that would have failed identically
+were never sent.
+
+**The raw-body retention rule paid for itself immediately, on its first live
+use.** This failure was at position 6 of the kill log. Under the original
+position-based rule - keep the first three of a run - **that body would have
+been dropped**, and that body is the entire fix: it named `source_tweet_id`
+directly. Without it the next step would have been guessing at key names against
+a write endpoint.
+
+That is the clearest possible vindication of the principle behind the change:
+position tells you nothing about which response is worth keeping, and the
+interesting one is by definition the one you did not predict. Retaining every
+non-success outcome at any position is what turned a failed run into a
+one-line fix.
+
 ### Raw bodies: position was the wrong criterion
 
 The first version kept the raw response for the first three items of a run.
@@ -1422,3 +1485,22 @@ Third instance of state-mistaken-for-transition in this project, so it is now
 written up as a pattern rather than three separate bugs.
 
 Suite: parser 68, streams 62, execute 111, build 26, filters 23.
+
+### 2026-09-06 — DeleteRetweet variable name
+
+A 422 named the problem exactly: `["variable","source_tweet_id"]`. Verb
+selection and target were correct; a shared variables builder sent DeleteTweet's
+key name.
+
+- **Per-operation variables tables.** No shared builder, no inheritance, key
+  sets asserted non-overlapping. DeleteTweet's proven shape untouched.
+- **DeleteRetweet sends only `source_tweet_id`.** `dark_request` is NOT assumed
+  from DeleteTweet - the reachable bundles contain none of these names, checked
+  rather than guessed, so the next 422 names the next variable if there is one.
+- **DeleteRetweet's success shape remains unconfirmed.** A 422 tells us nothing
+  about success.
+- Recorded: the run correctly stopped after one failure, and the raw-body
+  retention fix paid for itself on its first live use - the body that named the
+  bug sat at position 6 and the old rule would have dropped it.
+
+Suite: parser 68, streams 62, execute 125, build 26, filters 23.

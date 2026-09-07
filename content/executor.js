@@ -514,7 +514,10 @@
           res = await api.gqlPost({
             queryId: record.writes[plan.op].queryId,
             operationName: plan.op,
-            variables: { tweet_id: plan.targetId, dark_request: false },
+            // Per-operation, never a shared builder: DeleteTweet takes
+            // tweet_id, DeleteRetweet takes source_tweet_id, and a single
+            // builder sending one to the other is what caused the 422.
+            variables: execute.variablesFor(plan.op, plan.targetId),
             bearer: record.bearer,
             onLog: (level, message) => { store.log(level, message); },
             shouldAbort,
