@@ -337,281 +337,133 @@ ok(E.configFingerprint({ keepIdList: ['1'] }) !== E.configFingerprint({ keepIdLi
   ok(E.outcomeSummary(E.tally([])) === 'nothing dispatched', 'an empty run says so plainly');
 }
 
-/* ------------------------------------ CONFIRMED SUCCESS SHAPE --- */
+/* ------------------------------------ CONFIRMED SUCCESS SHAPES --- */
 
 {
-  // The exact body observed on all three captured responses of the 5-item run.
+  // DeleteTweet, from the 5-item live run. Nothing to verify against: the
+  // response returns an EMPTY tweet_results because the tweet is gone.
   const LIVE = { data: { delete_tweet: { tweet_results: {} } } };
 
-  const v = E.classifyOutcome({ status: 200, body: LIVE, operationName: 'DeleteTweet' });
-  ok(v.outcome === E.OUTCOME.SUCCEEDED,
-     'the confirmed DeleteTweet body grades as SUCCEEDED, not unverified');
-
-  ok(E.CONFIRMED_SUCCESS_SHAPES.DeleteTweet(LIVE) === true,
-     'the shape matches the live body');
+  ok(E.classifyOutcome({ status: 200, body: LIVE, operationName: 'DeleteTweet' })
+       .outcome === E.OUTCOME.SUCCEEDED,
+     'the confirmed DeleteTweet body grades as SUCCEEDED');
+  ok(E.CONFIRMED_SUCCESS_SHAPES.DeleteTweet(LIVE).ok === true, 'the shape matches');
   ok(E.CONFIRMED_SUCCESS_SHAPES.DeleteTweet(
-       { data: { delete_tweet: { tweet_results: {}, extra: 1 } } }) === true,
+       { data: { delete_tweet: { tweet_results: {}, extra: 1 } } }).ok === true,
      'extra fields do not break the match');
-
-  // tweet_results is EMPTY on purpose - the tweet no longer exists to be
-  // returned. Requiring anything inside it would report a correct deletion as
-  // a failure.
-  ok(E.CONFIRMED_SUCCESS_SHAPES.DeleteTweet({ data: { delete_tweet: {} } }) === true,
+  ok(E.CONFIRMED_SUCCESS_SHAPES.DeleteTweet({ data: { delete_tweet: {} } }).ok === true,
      'an absent tweet_results still matches - nothing inside it is required');
-
-  ok(E.CONFIRMED_SUCCESS_SHAPES.DeleteTweet({ data: {} }) === false,
+  ok(E.CONFIRMED_SUCCESS_SHAPES.DeleteTweet({ data: {} }).ok === false,
      'a 200 without delete_tweet does NOT match');
-  ok(E.CONFIRMED_SUCCESS_SHAPES.DeleteTweet({ data: { delete_tweet: null } }) === false,
+  ok(E.CONFIRMED_SUCCESS_SHAPES.DeleteTweet({ data: { delete_tweet: null } }).ok === false,
      'a null delete_tweet does not match');
   ok(E.CONFIRMED_SUCCESS_SHAPES.DeleteTweet(
-       { data: { delete_tweet: {} }, errors: [] }) === false,
+       { data: { delete_tweet: {} }, errors: [] }).ok === false,
      'an errors key present at all disqualifies, even when empty');
 
-  const nope = E.classifyOutcome({
-    status: 200, body: { data: {} }, operationName: 'DeleteTweet' });
-  ok(nope.outcome === E.OUTCOME.FAILED,
-     'a 200 that does not match the confirmed shape is a FAILURE, not unverified - ' +
-     'the shape is known now, so silence is not ambiguity');
-
-  // Errors still take precedence over the shape check.
-  const gone = E.classifyOutcome({
-    status: 200, body: { errors: [{ message: 'No status found with that ID.' }] },
-    operationName: 'DeleteTweet' });
-  ok(gone.outcome === E.OUTCOME.ALREADY_GONE,
+  ok(E.classifyOutcome({ status: 200, body: { data: {} }, operationName: 'DeleteTweet' })
+       .outcome === E.OUTCOME.FAILED,
+     'a 200 that does not match the confirmed shape is a FAILURE, not unverified');
+  ok(E.classifyOutcome({
+       status: 200, body: { errors: [{ message: 'No status found with that ID.' }] },
+       operationName: 'DeleteTweet' }).outcome === E.OUTCOME.ALREADY_GONE,
      'already-gone still wins over the shape check');
 }
 
 {
-  // DeleteRetweet is NOT confirmed and must not inherit DeleteTweet's shape.
-  const v = E.classifyOutcome({
-    status: 200,
-    body: { data: { unretweet: { source_tweet_results: {} } } },
-    operationName: 'DeleteRetweet',
+  // DeleteRetweet, from 10 identical live responses. The response key is
+  // `unretweet`, NOT `delete_retweet` - not derivable from the operation name.
+  const SRC = '669425844394270721';
+  const live = (id = SRC) =>
+    ({ data: { unretweet: { source_tweet_results: { result: { rest_id: id } } } } });
+
+  const good = E.classifyOutcome({
+    status: 200, body: live(), operationName: 'DeleteRetweet', targetId: SRC });
+  ok(good.outcome === E.OUTCOME.SUCCEEDED,
+     'the confirmed DeleteRetweet body grades as SUCCEEDED when the echoed id matches');
+
+  ok(E.CONFIRMED_SUCCESS_SHAPES.DeleteRetweet(live(), { targetId: SRC }).ok === true,
+     'the shape matches on the echoed id');
+  // A tweet id CANNOT survive Number(): 669425844394270721 is past 2^53 and
+  // becomes ...700. The comparison is string-based and correctly rejects it,
+  // which is the behaviour we want - a silently mangled id must never verify.
+  // planItem() always produces a String, so this is a guard, not a live path.
+  ok(String(Number(SRC)) !== SRC, 'a tweet id does not survive Number() - it loses precision');
+  ok(E.CONFIRMED_SUCCESS_SHAPES.DeleteRetweet(live(), { targetId: Number(SRC) }).ok === false,
+     'a numerically-mangled target does NOT verify - a mangled id must never pass');
+
+  // THE ONE THAT MATTERS. A response about a different tweet is a FAILURE.
+  const wrong = E.classifyOutcome({
+    status: 200, body: live('1111111111111111111'),
+    operationName: 'DeleteRetweet', targetId: SRC });
+  ok(wrong.outcome === E.OUTCOME.FAILED,
+     'ECHOED ID MISMATCH is a FAILURE, never a success - the single worst thing this ' +
+     'tool could quietly accept');
+  ok(wrong.mismatch === true, 'and it is flagged as a mismatch so it can be logged loudly');
+  ok(/669425844394270721/.test(wrong.detail) && /1111111111111111111/.test(wrong.detail),
+     'and the detail names BOTH ids: ' + wrong.detail.slice(0, 110));
+
+  // The strictness is real: shapes that would pass a laxer check must not pass.
+  ok(E.CONFIRMED_SUCCESS_SHAPES.DeleteRetweet(
+       { data: { unretweet: {} } }, { targetId: SRC }).ok === false,
+     'data.unretweet with no echoed id does not match - there is nothing to verify');
+  ok(E.CONFIRMED_SUCCESS_SHAPES.DeleteRetweet({ data: {} }, { targetId: SRC }).ok === false,
+     'a 200 without data.unretweet does not match');
+  ok(E.CONFIRMED_SUCCESS_SHAPES.DeleteRetweet(
+       { data: { delete_retweet: { source_tweet_results: { result: { rest_id: SRC } } } } },
+       { targetId: SRC }).ok === false,
+     'the key is `unretweet` - a `delete_retweet` key does NOT match, because the ' +
+     'response key was read off a live body and never inferred from the operation name');
+  ok(E.CONFIRMED_SUCCESS_SHAPES.DeleteRetweet(
+       { ...live(), errors: [] }, { targetId: SRC }).ok === false,
+     'an errors key disqualifies here too');
+
+  // The asymmetry between the two shapes is deliberate.
+  ok(E.CONFIRMED_SUCCESS_SHAPES.DeleteTweet(
+       { data: { delete_tweet: {} } }, { targetId: 'anything' }).ok === true,
+     'DeleteTweet is NOT made stricter to match - its response has nothing to verify ' +
+     'against, and inventing a check against an always-empty field would be theatre');
+
+  ok(E.unconfirmedOperations().length === 0,
+     'both write operations now have confirmed shapes: ' +
+     JSON.stringify(E.unconfirmedOperations()));
+}
+
+{
+  // A mismatch aborts the run at once rather than counting toward a streak.
+  const b = E.createBreaker();
+  E.recordOutcome(b, {
+    outcome: E.OUTCOME.FAILED, status: 200, body: { data: { unretweet: {} } },
+    mismatch: true, targetId: '1', op: 'DeleteRetweet',
   });
-  ok(v.outcome === E.OUTCOME.UNVERIFIED,
-     'DeleteRetweet stays UNVERIFIED - no live response has been seen for it');
-  ok(/DeleteRetweet/.test(v.detail), 'and the detail names the operation');
-
-  const asIfTweet = E.classifyOutcome({
-    status: 200, body: { data: { delete_tweet: {} } }, operationName: 'DeleteRetweet' });
-  ok(asIfTweet.outcome === E.OUTCOME.UNVERIFIED,
-     'knowledge about DeleteTweet does not leak into a claim about DeleteRetweet');
-
-  ok(E.unconfirmedOperations().join(',') === 'DeleteRetweet',
-     'unconfirmedOperations() names exactly what is still unknown: ' +
-     E.unconfirmedOperations().join(','));
-  ok(!E.CONFIRMED_SUCCESS_SHAPES.DeleteRetweet,
-     'there is no DeleteRetweet entry to accidentally match against');
+  ok(b.tripped === true && b.immediate === true,
+     'an ECHOED ID MISMATCH aborts immediately - continuing would dispatch every ' +
+     'remaining write on a broken assumption');
+  ok(/ECHOED ID MISMATCH/.test(b.reason), 'and says so: ' + b.reason.slice(0, 60));
 }
 
-/* ------------------------------------------ CIRCUIT BREAKER --- */
-
-const fail = (b = { errors: [{ message: 'boom' }] }, status = 500) =>
-  ({ outcome: E.OUTCOME.FAILED, status, body: b, targetId: '1', op: 'DeleteTweet' });
-const win = () => ({ outcome: E.OUTCOME.SUCCEEDED, status: 200, body: { data: {} } });
+/* --------------------------------------- ONE TARGET, ONE WRITE --- */
 
 {
-  // 5 consecutive failures aborts.
-  const b = E.createBreaker();
-  for (let i = 1; i <= 4; i += 1) {
-    E.recordOutcome(b, fail());
-    ok(b.tripped === false, 'failure ' + i + ' of 5 does not trip yet');
-  }
-  E.recordOutcome(b, fail());
-  ok(b.tripped === true, 'the FIFTH consecutive failure trips the breaker');
-  ok(/5 consecutive failures/.test(b.reason), 'and says why: ' + b.reason);
-  ok(b.immediate === false, 'it is a streak abort, not an immediate one');
-  ok(b.failures.length === 5, 'the raw failure bodies are retained for the report');
-  ok(b.failures.every((f) => f.raw), 'each retained failure carries its body');
+  // Two distinct items resolving to the SAME delete target must produce one
+  // write, not two. Results are deduplicated by item id, but two retweet
+  // entries could in principle carry the same sourceTweetId.
+  const items = [
+    item({ id: '3000000000000000011', kind: 'retweet', sourceTweetId: FOREIGN_ORIGINAL }),
+    item({ id: '3000000000000000012', kind: 'retweet', sourceTweetId: FOREIGN_ORIGINAL }),
+  ];
+  const plan = E.buildPlan({ items, config: F.defaultConfig(), evaluate: F.evaluate });
+  ok(plan.dispatch.length === 1,
+     'the same delete target is dispatched ONCE even from two different items');
+  ok(plan.skipped.length === 1 && plan.skipped[0].reason === E.SKIP.DUPLICATE_TARGET,
+     'and the duplicate is reported rather than silently dropped');
 
-  // Once tripped it stays tripped and stops accumulating.
-  const before = b.consecutive;
-  E.recordOutcome(b, win());
-  ok(b.tripped === true && b.consecutive === before,
-     'a tripped breaker is not un-tripped by a later success');
-}
-
-{
-  // 4 failures, a success, 4 more failures: NOT an abort.
-  const b = E.createBreaker();
-  for (let i = 0; i < 4; i += 1) E.recordOutcome(b, fail());
-  ok(b.consecutive === 4, 'four failures counted');
-  E.recordOutcome(b, win());
-  ok(b.consecutive === 0 && b.tripped === false, 'a SUCCESS resets the counter');
-  for (let i = 0; i < 4; i += 1) E.recordOutcome(b, fail());
-  ok(b.tripped === false,
-     '4 failures, a success, then 4 more does NOT abort - 8 failures in a run that is ' +
-     'evidently still working is not a systemic break');
-  ok(b.consecutive === 4, 'and the second streak is counted from zero');
-}
-
-{
-  // already-gone also resets: the endpoint is working.
-  const b = E.createBreaker();
-  for (let i = 0; i < 4; i += 1) E.recordOutcome(b, fail());
-  E.recordOutcome(b, { outcome: E.OUTCOME.ALREADY_GONE, status: 200, body: {} });
-  ok(b.consecutive === 0 && b.tripped === false,
-     'ALREADY-GONE resets the counter too - the request worked, the tweet was simply gone');
-}
-
-{
-  // A single validation error aborts immediately.
-  const b = E.createBreaker();
-  E.recordOutcome(b, fail({
-    errors: [{ code: 'GRAPHQL_VALIDATION_FAILED',
-               extensions: { code: 'GRAPHQL_VALIDATION_FAILED' },
-               message: 'must be defined', path: ['variable', 'source_tweet_id'] }],
-  }, 422));
-  ok(b.tripped === true, 'ONE GRAPHQL_VALIDATION_FAILED aborts immediately');
-  ok(b.immediate === true, 'and is marked as an immediate abort, not a streak');
-  ok(b.consecutive === 1, 'after a single failure, not five');
-  ok(/GRAPHQL_VALIDATION_FAILED/.test(b.reason) && /retrying cannot fix/.test(b.reason),
-     'the reason explains that retrying cannot fix a wrong request shape');
-
-  // Same when the code is only in extensions.
-  const b2 = E.createBreaker();
-  E.recordOutcome(b2, fail({ errors: [{ extensions: { code: 'GRAPHQL_VALIDATION_FAILED' } }] },
-                            422));
-  ok(b2.tripped === true, 'the code is found in extensions as well as at the top level');
-}
-
-{
-  // Any non-429 4xx aborts immediately.
-  for (const status of [400, 404, 409, 422]) {
-    const b = E.createBreaker();
-    E.recordOutcome(b, fail({ errors: [{ message: 'nope' }] }, status));
-    ok(b.tripped === true && b.immediate === true,
-       'a single HTTP ' + status + ' aborts immediately - refused, not deferred');
-  }
-
-  // 5xx does NOT abort immediately: a server error might genuinely be transient.
-  const b5 = E.createBreaker();
-  E.recordOutcome(b5, fail({ errors: [{ message: 'oops' }] }, 503));
-  ok(b5.tripped === false && b5.consecutive === 1,
-     'a 5xx counts toward the streak rather than aborting on its own');
-}
-
-{
-  // 429 does not count toward the breaker at all.
-  const b = E.createBreaker();
-  for (let i = 0; i < 20; i += 1) {
-    E.recordOutcome(b, { outcome: E.OUTCOME.FAILED, status: 429, body: null,
-                         targetId: '1', op: 'DeleteTweet' });
-  }
-  ok(b.tripped === false && b.consecutive === 0,
-     'TWENTY 429s do not trip the breaker - a rate limit is a "later", not a "no"');
-  ok(b.failures.length === 0, 'and they are not recorded as failures');
-
-  // Nor do they launder an existing streak.
-  const b2 = E.createBreaker();
-  for (let i = 0; i < 4; i += 1) E.recordOutcome(b2, fail());
-  E.recordOutcome(b2, { outcome: E.OUTCOME.FAILED, status: 429, body: null });
-  ok(b2.consecutive === 4,
-     'a 429 mid-streak neither counts nor RESETS - it cannot launder a failure streak');
-  E.recordOutcome(b2, fail());
-  ok(b2.tripped === true, 'so the next real failure still trips it');
-}
-
-{
-  // unverified is neutral in both directions.
-  const b = E.createBreaker();
-  for (let i = 0; i < 4; i += 1) E.recordOutcome(b, fail());
-  E.recordOutcome(b, { outcome: E.OUTCOME.UNVERIFIED, status: 200, body: {} });
-  ok(b.consecutive === 4,
-     'UNVERIFIED does not reset the streak - it is not evidence of success');
-  ok(b.tripped === false, 'and does not count toward it either');
-}
-
-{
-  // An aborted run never reports as complete.
-  ok(E.runStatusFor({ abortedByBreaker: true }) === 'aborted',
-     'a breaker abort produces status "aborted"');
-  ok(E.runStatusFor({ abortedByBreaker: true, fatal: true, stopped: true }) === 'aborted',
-     'and it wins over every other status - an aborted run is never anything else');
-  ok(E.runStatusFor({ fatal: true }) === 'error', 'a fatal error is still an error');
-  ok(E.runStatusFor({ stopped: true }) === 'stopped', 'a user stop is still stopped');
-  ok(E.runStatusFor({}) === 'done', 'an untroubled run is done');
-
-  ok(E.runIsComplete('done') === true, 'only "done" counts as complete');
-  for (const s of ['aborted', 'error', 'stopped', 'running', null]) {
-    ok(E.runIsComplete(s) === false, JSON.stringify(s) + ' is NOT complete');
-  }
-
-  const b = E.createBreaker();
-  for (let i = 0; i < 5; i += 1) E.recordOutcome(b, fail());
-  const report = E.breakerReport(b, { succeeded: 3, failed: 5, alreadyGone: 0, unverified: 0 }, 8);
-  ok(/RUN ABORTED BY THE CIRCUIT BREAKER/.test(report), 'the report leads with the abort');
-  ok(/8 dispatched/.test(report) && /3 succeeded/.test(report) && /5 failed/.test(report),
-     'it states how many were dispatched and how they turned out: ' + report.slice(0, 90));
-  ok(/were NOT dispatched/.test(report), 'it says the remaining items were not attempted');
-  ok(/not complete and must not be read as one/.test(report),
-     'and it refuses to be read as a completed run');
-  ok(E.breakerReport(E.createBreaker(), {}, 0) === null,
-     'an untripped breaker produces no abort report');
-}
-
-/* --------------------------------------- KILL LOG AUTO-OFFER --- */
-
-{
-  // The bug: five kill-log files landed in Downloads from OPENING the panel,
-  // after a single run. Every one contained the full text of deleted posts.
-  // A persisted condition was being read as an event.
-  const base = {
-    status: 'done', runId: 'run-1',
-    dispatchedThisSession: true, alreadyOffered: false,
-  };
-
-  ok(E.shouldOfferKillLog(base) === true,
-     'a run that finished in THIS session, not yet offered, is offered once');
-
-  ok(E.shouldOfferKillLog({ ...base, dispatchedThisSession: false }) === false,
-     'REHYDRATE DOES NOT OFFER: a completed run this session did not dispatch is not ' +
-     'a run that just completed');
-
-  ok(E.shouldOfferKillLog({ ...base, alreadyOffered: true }) === false,
-     'a run already offered is never offered again - the record is persisted, so a ' +
-     'reload cannot resurrect it');
-
-  ok(E.shouldOfferKillLog({ ...base, dispatchedThisSession: false, alreadyOffered: true })
-     === false, 'both guards together still refuse');
-
-  ok(E.shouldOfferKillLog({ ...base, status: 'running' }) === false,
-     'a run still in progress is not offered');
-  ok(E.shouldOfferKillLog({ ...base, status: null }) === false,
-     'a run with no status is not offered');
-  ok(E.shouldOfferKillLog({ ...base, runId: null }) === false,
-     'no runId, no offer');
-
-  for (const status of ['done', 'stopped', 'error']) {
-    ok(E.shouldOfferKillLog({ ...base, status }) === true,
-       'a ' + status + ' run is offered - a crashed run needs its log MOST');
-  }
-}
-
-{
-  // The persisted record.
-  ok(JSON.stringify(E.recordOffered([], 'run-1')) === '["run-1"]',
-     'the first offer is recorded');
-  ok(JSON.stringify(E.recordOffered(['run-1'], 'run-2')) === '["run-1","run-2"]',
-     'a second run is appended without losing the first');
-  ok(JSON.stringify(E.recordOffered(['run-1'], 'run-1')) === '["run-1"]',
-     'recording the same run twice does not duplicate it');
-  ok(JSON.stringify(E.recordOffered(null, 'run-1')) === '["run-1"]',
-     'a missing record starts cleanly rather than throwing');
-  ok(E.recordOffered(['x'], null).length === 1, 'a null runId records nothing');
-
-  const many = Array.from({ length: 300 }, (_, i) => 'r' + i);
-  const capped = E.recordOffered(many, 'r-new');
-  ok(capped.length === 200 && capped[capped.length - 1] === 'r-new',
-     'the record is bounded but always keeps the newest');
-
-  // The round trip that matters: offered, reloaded, still not re-offered.
-  const persisted = E.recordOffered([], 'run-7');
-  ok(E.shouldOfferKillLog({
-    status: 'done', runId: 'run-7',
-    dispatchedThisSession: true,          // even if it HAD been dispatched here
-    alreadyOffered: persisted.includes('run-7'),
-  }) === false, 'THE ONE-SHOT SURVIVES A RELOAD: a persisted offer suppresses the next one');
+  // Different targets are untouched by the dedupe.
+  const two = E.buildPlan({
+    items: [item({ id: MY_POST }), item({ id: MY_REPLY, kind: 'reply' })],
+    config: F.defaultConfig(), evaluate: F.evaluate,
+  });
+  ok(two.dispatch.length === 2, 'distinct targets are both dispatched');
 }
 
 /* ------------------------------------------- RAW BODY RETENTION --- */

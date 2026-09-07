@@ -540,7 +540,14 @@
 
         const verdict = execute.classifyOutcome({
           status: res.status, body: res.body, operationName: plan.op,
+          targetId: plan.targetId,
         });
+        if (verdict.mismatch) {
+          await store.log('error',
+            'ECHOED ID MISMATCH on ' + plan.op + ': sent ' + plan.targetId +
+            ', response confirmed a different tweet. ' + verdict.detail +
+            '  Raw: ' + String(res.raw).slice(0, 1000));
+        }
 
         // Retain the raw body for ANY non-success outcome, wherever it occurs,
         // plus the first few of a run for confirming shapes. Keeping only the
@@ -589,6 +596,7 @@
           detail: verdict.detail,
           targetId: plan.targetId,
           op: plan.op,
+          mismatch: Boolean(verdict.mismatch),
         });
         if (breaker.tripped) {
           exec.abortedByBreaker = true;

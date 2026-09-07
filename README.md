@@ -260,12 +260,17 @@ reported**, never falls back to anything.
 and *unverified*. A `200` is not proof of deletion, so success requires a
 response shape confirmed against a real live response **for that operation**.
 
-`DeleteTweet` is confirmed, from a 5-item test run verified by hand afterwards.
-`DeleteRetweet` is **not** — no retweet has been deleted yet, so no response has
-been seen, and it is not assumed to mirror `DeleteTweet`. Until it is captured,
-undoing a retweet reports as *unverified* rather than deleted, and the panel
-says which operation is unconfirmed. The run will not inflate a success count to
-look tidy.
+Both write operations now have shapes confirmed against live responses, and
+`DeleteRetweet`'s is **stricter**: its response echoes back the id it acted on,
+so Surtr checks that the echoed id is the one it sent. A response confirming a
+different tweet is treated as a failure and aborts the run immediately.
+`DeleteTweet`'s response returns nothing to check against, so it is not given an
+invented check — verify what the response actually gives you.
+
+One limitation worth knowing: re-issuing an unretweet against something already
+unretweeted returns the same success shape as a real one, so for retweets the
+deleted count means *requests that succeeded*, not *retweets that existed and
+are now gone*. Re-scan before a run and the distinction does not arise.
 
 ### Scope
 

@@ -449,13 +449,61 @@ Now that the shape is known, a DeleteTweet 200 that does **not** match grades as
 `failed` rather than `unverified`: silence used to be ambiguity, and is not any
 more.
 
-**DeleteRetweet's shape is NOT confirmed.** No retweet has been deleted, so no
-response has been seen. It probably looks like `data.unretweet`, and *probably*
-is not good enough for something irreversible - guessing would mean either
-reporting a real failure as a success or a real success as a failure. It stays
-`unverified` until a live response exists, the panel says so on the
-DeleteRetweet row, and `CONFIRMED_SUCCESS_SHAPES` simply has no entry for it so
-there is nothing to match against by accident.
+**DeleteRetweet's success shape is CONFIRMED**, from 10 identical live
+responses:
+
+```
+HTTP 200
+{"data":{"unretweet":{"source_tweet_results":{"result":{"rest_id":"<source id>"}}}}}
+```
+
+**The response key is `unretweet`, not `delete_retweet`.** It is not derivable
+from the operation name and was not guessed - it was read off a live body. A
+test asserts a `delete_retweet` key does NOT match, so nobody can later "fix"
+this into consistency.
+
+`source_tweet_id` alone was sufficient; no `dark_request` was required. The
+one-variable-per-iteration discipline ended after exactly one iteration.
+
+**This shape is STRICTER than DeleteTweet's, and the asymmetry is deliberate.**
+DeleteRetweet's response echoes back the id it acted on; DeleteTweet's returns
+an empty `tweet_results` because the tweet is gone. So DeleteRetweet verifies
+the echoed `rest_id` against the `source_tweet_id` we sent, and DeleteTweet
+verifies nothing beyond the key's presence.
+
+Verify what the response actually gives you. Normalising the two would mean
+either dropping a real check or inventing one against an always-empty field,
+and the second is theatre that reads like rigour.
+
+**An echoed id that does not match is a FAILURE and aborts the run at once.**
+Not a success, not a streak entry. A response confirming a different tweet than
+the one targeted means either our target resolution or X's routing is wrong, and
+every further dispatch would rest on a broken assumption. It is logged with BOTH
+ids and the raw body.
+
+One hazard found while testing this: **a tweet id cannot survive `Number()`**.
+`669425844394270721` is past 2^53 and becomes `...700`. The comparison is
+string-based and correctly rejects a mangled id; `planItem()` always produces a
+String, so this is a guard rather than a live path, but it is asserted so it
+stays one.
+
+### LIMITATION: for retweets, already-gone is indistinguishable from success
+
+Re-issuing DeleteRetweet against a post that is already unretweeted returns the
+**same success shape** as a real unretweet - including a matching echoed
+`rest_id`. There is nothing in the response to tell the two apart.
+
+So for retweets, the deleted count means **"requests that succeeded"**, not
+"retweets that existed and are now gone". A run that re-processes a stale
+matched set will report those retweets as deleted a second time, truthfully by
+its own definition and misleadingly to a reader.
+
+DeleteTweet does not have this problem: deleting an already-deleted tweet
+returns an error that grades as `already-gone`, which is counted separately.
+
+This is a limitation of the endpoint, not something to paper over with a guess.
+The honest mitigation is to re-scan before a run so the matched set reflects
+what still exists - which the arm gate already requires for a different reason.
 
 Shapes are keyed **per operation** for exactly this reason: knowledge about one
 must not leak into a claim about another.
@@ -618,6 +666,17 @@ tracking is keyed by operation name), start at concurrency 1 with a conservative
 on 429 with the same visible countdown as the reads. 401/403 abort the whole run.
 
 The pacing is not a guess at the ceiling — it is a refusal to find it at speed.
+
+### One target, one write
+
+Two distinct items could in principle resolve to the same delete target - two
+retweet entries carrying the same `sourceTweetId`, say. Results are deduplicated
+by ITEM id, which would not catch that, so `buildPlan()` now also deduplicates
+by `(operation, targetId)` and reports the duplicate as `duplicate-target`
+rather than dropping it silently.
+
+This makes "one run dispatches the same item twice" structurally impossible
+rather than merely unobserved.
 
 ### The consecutive-failure circuit breaker
 
@@ -1581,3 +1640,23 @@ The first-item guard only caught runs broken from the start. Now:
   triggers".
 
 Suite: parser 68, streams 62, execute 172, build 26, filters 23.
+
+### 2026-09-06 — DeleteRetweet shape confirmed, and made stricter
+
+10 identical live responses. `source_tweet_id` alone was sufficient.
+
+- **The response key is `unretweet`**, not `delete_retweet` - read off a live
+  body, never inferred from the operation name, and tested so it stays that way.
+- **Stricter than DeleteTweet on purpose**: this response echoes the id it acted
+  on, so the echoed `rest_id` is verified against what we sent. DeleteTweet's
+  returns an empty tweet_results and has nothing to verify, so it is left alone.
+  Verify what the response gives you; do not normalise the two.
+- **A mismatched echo is a FAILURE and aborts the run immediately**, logged with
+  both ids.
+- **Limitation recorded**: for retweets, already-gone is indistinguishable from
+  success, so the deleted count means "requests that succeeded".
+- **buildPlan deduplicates by (operation, target)**, so one run cannot dispatch
+  the same target twice even if two items resolve to it.
+- Hazard asserted: a tweet id does not survive `Number()`.
+
+Suite: parser 68, streams 62, execute 121, build 26, filters 23.
