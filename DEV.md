@@ -476,6 +476,61 @@ Full runs are locked behind an **attestation**, not a check the tool can make:
 Surtr cannot verify from here that a post is gone, so the user confirms by hand
 and ticks the box. It is labelled as an attestation rather than a verification.
 
+### PRIVACY DEFECT: the kill log auto-downloaded on panel open
+
+**Five `surtr-killlog-*.json` files landed in Downloads from opening the side
+panel**, after a single run. Each contained the FULL TEXT of deleted posts.
+
+This is recorded as a privacy defect, not a papercut. The kill log exists to
+hold what was destroyed, which makes it the most sensitive artefact this tool
+produces, and it was being written to disk silently on a UI event nobody asked
+for. Somebody who opened the panel five times to check on a scan ended up with
+five copies of their own deleted post text sitting in a folder they did not
+choose. Nothing warned them, and nothing would have.
+
+**Cause: a persisted condition read as an event.** The auto-offer was guarded by
+a module-scope flag, which is reset to undefined on every panel load. The panel
+rehydrates from `chrome.storage.local` on open, saw a completed run with a log
+attached, and treated "a completed run exists" as "a run just completed".
+
+That is the same shape as the dead run that kept rendering as live, and as the
+counter that never reset at the window boundary: **state mistaken for a
+transition.** Three instances now, in three different parts of the code, so it
+is worth naming as a pattern rather than fixing case by case. The tell is a
+boolean that lives only in memory guarding an action whose trigger is persisted.
+
+**The fix requires all three of:**
+
+1. a terminal run status
+2. the run was dispatched **by this panel session** - a set of run ids held only
+   in memory, deliberately not persisted, so that after a reload it is empty and
+   a rehydrated run cannot look like a fresh completion
+3. no record of having offered it before, checked against a **persisted** list
+   of run ids, so a reload cannot resurrect the offer
+
+The record is written BEFORE the download, so a failure to save cannot produce a
+loop of repeated offers. Only run ids are persisted - never post text.
+
+The manual download buttons are untouched: retrieving the log later is a
+deliberate act and always available.
+
+Covered two ways. `tests/execute.test.mjs` pins the rule, including that a
+persisted offer survives a reload. A browser test seeds exactly the reported
+state - one completed run, a populated kill log, no offer recorded - opens the
+panel three times and asserts the download directory stays **empty**, then that
+the manual button still works, then that a reload after a manual download does
+not add another file.
+
+### The audit that came with it
+
+Checked every side effect reachable from a render or rehydrate path. One other
+instance of the same shape, harmless: `renderDiscovery` forced the manual
+override `<details>` open on **every** repaint when discovery was incomplete, so
+a user who closed it had it reopen under them at the next storage change. Now
+once per session. Everything else - both report downloads, the donate link, the
+test attestation write - is behind a user click, which is where an action with a
+side effect belongs.
+
 ### Raw bodies: position was the wrong criterion
 
 The first version kept the raw response for the first three items of a run.
@@ -1348,3 +1403,22 @@ spacing.
   characters with the truncation marked.
 
 Suite: parser 68, streams 62, execute 94, build 26, filters 23.
+
+### 2026-09-06 — The kill log auto-downloaded on panel open
+
+A privacy defect, fixed. Five files containing deleted-post text were written to
+Downloads by opening the panel, after one run. A module-scope guard reset on
+every load, so a rehydrated completed run read as a fresh completion.
+
+The auto-offer now needs a terminal status, a run dispatched by THIS panel
+session (tracked in memory, deliberately not persisted), and no persisted record
+of a previous offer. Manual downloads unchanged.
+
+Audited every other render-path side effect: one more instance of the same
+state-vs-event shape, harmless, in the manual-override auto-open. Everything
+else is behind a click.
+
+Third instance of state-mistaken-for-transition in this project, so it is now
+written up as a pattern rather than three separate bugs.
+
+Suite: parser 68, streams 62, execute 111, build 26, filters 23.

@@ -347,6 +347,70 @@ ok(E.configFingerprint({ keepIdList: ['1'] }) !== E.configFingerprint({ keepIdLi
      'there is no DeleteRetweet entry to accidentally match against');
 }
 
+/* --------------------------------------- KILL LOG AUTO-OFFER --- */
+
+{
+  // The bug: five kill-log files landed in Downloads from OPENING the panel,
+  // after a single run. Every one contained the full text of deleted posts.
+  // A persisted condition was being read as an event.
+  const base = {
+    status: 'done', runId: 'run-1',
+    dispatchedThisSession: true, alreadyOffered: false,
+  };
+
+  ok(E.shouldOfferKillLog(base) === true,
+     'a run that finished in THIS session, not yet offered, is offered once');
+
+  ok(E.shouldOfferKillLog({ ...base, dispatchedThisSession: false }) === false,
+     'REHYDRATE DOES NOT OFFER: a completed run this session did not dispatch is not ' +
+     'a run that just completed');
+
+  ok(E.shouldOfferKillLog({ ...base, alreadyOffered: true }) === false,
+     'a run already offered is never offered again - the record is persisted, so a ' +
+     'reload cannot resurrect it');
+
+  ok(E.shouldOfferKillLog({ ...base, dispatchedThisSession: false, alreadyOffered: true })
+     === false, 'both guards together still refuse');
+
+  ok(E.shouldOfferKillLog({ ...base, status: 'running' }) === false,
+     'a run still in progress is not offered');
+  ok(E.shouldOfferKillLog({ ...base, status: null }) === false,
+     'a run with no status is not offered');
+  ok(E.shouldOfferKillLog({ ...base, runId: null }) === false,
+     'no runId, no offer');
+
+  for (const status of ['done', 'stopped', 'error']) {
+    ok(E.shouldOfferKillLog({ ...base, status }) === true,
+       'a ' + status + ' run is offered - a crashed run needs its log MOST');
+  }
+}
+
+{
+  // The persisted record.
+  ok(JSON.stringify(E.recordOffered([], 'run-1')) === '["run-1"]',
+     'the first offer is recorded');
+  ok(JSON.stringify(E.recordOffered(['run-1'], 'run-2')) === '["run-1","run-2"]',
+     'a second run is appended without losing the first');
+  ok(JSON.stringify(E.recordOffered(['run-1'], 'run-1')) === '["run-1"]',
+     'recording the same run twice does not duplicate it');
+  ok(JSON.stringify(E.recordOffered(null, 'run-1')) === '["run-1"]',
+     'a missing record starts cleanly rather than throwing');
+  ok(E.recordOffered(['x'], null).length === 1, 'a null runId records nothing');
+
+  const many = Array.from({ length: 300 }, (_, i) => 'r' + i);
+  const capped = E.recordOffered(many, 'r-new');
+  ok(capped.length === 200 && capped[capped.length - 1] === 'r-new',
+     'the record is bounded but always keeps the newest');
+
+  // The round trip that matters: offered, reloaded, still not re-offered.
+  const persisted = E.recordOffered([], 'run-7');
+  ok(E.shouldOfferKillLog({
+    status: 'done', runId: 'run-7',
+    dispatchedThisSession: true,          // even if it HAD been dispatched here
+    alreadyOffered: persisted.includes('run-7'),
+  }) === false, 'THE ONE-SHOT SURVIVES A RELOAD: a persisted offer suppresses the next one');
+}
+
 /* ------------------------------------------- RAW BODY RETENTION --- */
 
 {

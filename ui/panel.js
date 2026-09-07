@@ -148,7 +148,14 @@ function renderDiscovery(d) {
   const unused = d.unusedCandidates || [];
   setStatus($('st-alt'), null, unused.length ? unused.join(', ') : '—');
 
-  if (d.missing && d.missing.length > 0) $('manual-wrap').open = true;
+  // Open the manual override once when discovery is incomplete, not on every
+  // repaint. The same state-vs-event confusion as the kill-log auto-download,
+  // in a harmless place: forcing it open on every render means a user who
+  // closes it has it reopen under them at the next storage change.
+  if (d.missing && d.missing.length > 0 && !renderDiscovery._openedManual) {
+    renderDiscovery._openedManual = true;
+    $('manual-wrap').open = true;
+  }
 }
 
 function renderJob(job) {
@@ -673,6 +680,14 @@ for (const id of [
 let execSession = null;
 let execPlanCount = 0;
 
+/**
+ * Runs dispatched by THIS panel session.
+ *
+ * Deliberately not persisted: its whole purpose is to be empty after a reload,
+ * so a rehydrated completed run cannot be mistaken for one that just finished.
+ */
+const dispatchedRunIds = new Set();
+
 async function refreshExecute() {
   const job = await store.readJob();
   const results = await store.readResults();
@@ -812,11 +827,30 @@ function renderExec(x) {
     u.hidden = true;
   }
 
-  // The kill log is the only record. Offer it without being asked.
-  if (x.status && x.status !== 'running' && !renderExec._offered) {
-    renderExec._offered = true;
-    downloadKillLog('json');
-  }
+  // The kill log is the only record, so it is offered without being asked -
+  // but ONLY on the transition into completion, and only for a run this panel
+  // session actually dispatched. Reading "a completed run exists" as "a run
+  // just completed" wrote the full text of deleted posts to disk every time
+  // the panel was opened. See execute.shouldOfferKillLog.
+  maybeOfferKillLog(x);
+}
+
+/** Fire-and-forget so renderExec stays synchronous. */
+function maybeOfferKillLog(x) {
+  if (!x) return;
+  (async () => {
+    const offered = (await store.get(store.KEY.KILLLOG_OFFERED)) || [];
+    if (!execute.shouldOfferKillLog({
+      status: x.status,
+      runId: x.runId,
+      dispatchedThisSession: dispatchedRunIds.has(x.runId),
+      alreadyOffered: offered.includes(x.runId),
+    })) return;
+    // Record BEFORE downloading, so a failure to save cannot produce a loop of
+    // repeated offers.
+    await store.set(store.KEY.KILLLOG_OFFERED, execute.recordOffered(offered, x.runId));
+    await downloadKillLog('json');
+  })();
 }
 
 async function downloadKillLog(kind) {
@@ -861,8 +895,9 @@ async function dispatchExecute(testMode) {
     const { matched } = filters.partition(results, config);
     payload.confirmCount = execute.selectTestItems(matched).length;
   }
-  renderExec._offered = false;
   const r = await send(payload);
+  // Only a run THIS session dispatched may be auto-offered on completion.
+  if (r && r.runId) dispatchedRunIds.add(r.runId);
   if (!r.ok) {
     $('exec-blocked').textContent = 'EXECUTION REFUSED: ' + (r.error || 'unknown');
     $('exec-blocked').hidden = false;
