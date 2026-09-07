@@ -185,13 +185,28 @@
   </div>
 
   <p id="rate-wait" class="banner waiting" hidden></p>
-  <p id="shortfall" class="banner bad" hidden></p>
-  <p id="stream-skipped" class="banner" hidden></p>
-  <p id="dupes" class="banner bad" hidden></p>
-  <p id="overlap" class="meta" hidden></p>
-  <div id="stream-reports"></div>
-  <p id="skipped" class="meta" hidden></p>
+
+  <!-- WHAT THE USER ACTUALLY NEEDS: what was scanned, how many were found, how
+       many match, what was left out. One line. It turns red only when
+       something is genuinely wrong - a scan that is correct and complete for
+       its own scope shows no warning colour at all, because severity that
+       fires on routine runs teaches people to ignore it. -->
+  <p id="scan-summary" class="banner" hidden></p>
+  <p id="scan-caveat" class="meta" hidden></p>
   <p id="scan-error" class="error" hidden></p>
+
+  <!-- Nothing here is removed or weakened - it is one click away instead of
+       shouting. Per-stream reports, ceiling notes, operation names, skipped
+       entry counts and X's account total, all unchanged. -->
+  <details id="scan-details" hidden>
+    <summary>Scan details</summary>
+    <p id="shortfall" class="banner bad" hidden></p>
+    <p id="stream-skipped" class="banner" hidden></p>
+    <p id="dupes" class="banner bad" hidden></p>
+    <p id="overlap" class="meta" hidden></p>
+    <div id="stream-reports"></div>
+    <p id="skipped" class="meta" hidden></p>
+  </details>
 
   <h3>Matches <span id="res-count" class="tag">0</span></h3>
   <p class="hint">

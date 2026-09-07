@@ -1870,3 +1870,105 @@ preview listing exactly five, the full run locked until armed AND counted AND
 attested, a wrong count re-locking it, and zero horizontal overflow.
 
 Suite: parser 69, streams 63, execute 206, build 27, filters 23.
+
+### Scope is not shortfall
+
+`completeness()` compares what a run enumerated against what X reports for the
+account. That comparison is only valid when every stream was walked. Under a
+kind filter whole streams are never read, and comparing against the ACCOUNT
+total then reports the user's own filter back to them as a gap: a deliberate
+posts-only scan showed
+
+> INCOMPLETE: 23 of 2035 items X reports for this account (1%). 2012
+> unaccounted for.
+
+in red. Every one of those 2,012 was a reply or repost the user had asked
+Surtr not to look at. The sentence was false, and it was false on a routine,
+correct run.
+
+**Severity has to mean something.** A red banner on an ordinary correct scan
+does not just annoy - it trains the user to skip red, and then the shortfall
+warning that matters, the one that says a stream hit the ceiling and older
+posts are unreachable, does not work when it is needed. Spending severity on
+the routine case is how you disarm it for the real one.
+
+So the fix is in the arithmetic, not the colour: streams with status
+`SKIPPED` are excluded from the comparison. A stream the user excluded is
+**scope**, and it is reported as scope - "reposts and replies were not
+included" - never as incompleteness.
+
+### The weaker claim has to sound weaker
+
+X publishes ONE account-wide total and no per-stream totals. So a filtered
+scan has no in-scope denominator, and cannot be checked against a number at
+all. The honest claim is strictly weaker than the full-scope one, and the two
+cases are deliberately worded so they cannot be confused:
+
+| scope | claim |
+|---|---|
+| all three streams | `604 of 2616 reported by X (23%)` - a real comparison |
+| filtered | "every stream Surtr walked ran to completion - no ceiling hit, no failure, no cursor exhaustion", explicitly NOT a claim about the account, and no percentage |
+
+`completeness()` returns `scopeFiltered`, and the filtered branch returns
+`percent: null` and `shortfall: null` rather than a softened number - any
+figure there would be arithmetic against the wrong total. The wording lives in
+a `claim` field so the panel renders it rather than deriving a second copy.
+The account total is still reported and still shown, in Scan details, with its
+provenance; it is simply no longer used as a denominator for something it does
+not denominate.
+
+A stream that WAS walked and came up short - ceiling, failure, page bound,
+repeated cursor - still warns, filtered or not. That is what `streamRanClean()`
+decides, and it is the only thing that can raise red on a filtered scan.
+
+### A second test that encoded the bug
+
+`tests/streams.test.mjs` asserted, in as many words:
+
+```js
+ok(c.complete === false && /skipped/.test(c.reason || ''),
+   'a skipped stream blocks complete and is named as the reason');
+```
+
+That is the defect written down and locked in. It is the **second** assertion
+in this one file to do that - the first said `complete === true` when the
+account total was unknown. Both were written by the same hand as the code they
+were checking, in the same sitting, from the same wrong idea. A test written
+alongside its implementation inherits its assumptions; it catches drift later,
+but it cannot catch a mistake it shares. Worth remembering the next time a
+suite passing feels like evidence the thinking was right.
+
+### One rule, one place
+
+The panel had its own hand-copied transcription of `shortfallBanner()`'s text
+inline in `renderJob`. Fixing the wording in `lib/` would have left the UI
+still saying the old thing - the same drift that put a NUL byte in a duplicated
+separator constant. The panel now calls `streams.shortfallBanner(c)` and the
+duplicate is gone. This is also why the in-scope arithmetic went into `lib/`
+rather than being re-derived in `ui/panel.js`: a second copy of a rule is a
+second thing that can be wrong on its own.
+
+### 2026-09-06 - Scope is not shortfall; the scan panel says one thing
+
+- **`completeness()` gets an in-scope denominator.** SKIPPED streams are out of
+  the comparison. Everything in scope walked clean => complete, no red. Only
+  `completeness()` changed; `COMPLETENESS_TOLERANCE`, every gate and every
+  grade are untouched.
+- **The filtered claim is deliberately weaker and worded so**, with no
+  percentage and an explicit "this is NOT a claim that your account holds
+  nothing else". It is on screen, not just in the code.
+- **One summary line** replaces the banner stack: what was scanned, how many
+  found, how many match, what was left out. Per-stream reports, ceiling notes,
+  operation names, skipped-entry counts and X's account total all moved into a
+  collapsed **Scan details** - present and unchanged, one click away.
+- **X's account total was nearly lost**: it had only ever reached the screen
+  inside the red banner, so suppressing that banner would have taken the number
+  with it. It is now rendered in Scan details with its provenance.
+- **The panel's duplicated copy of `shortfallBanner()` is deleted.**
+- One existing assertion changed because it encoded the defect - flagged, not
+  quietly rewritten.
+
+Suite: parser 69, streams 85, execute 206, build 27.
+Harnesses: `ui_pass_test.mjs` ALL PASS, new `scan_panel_test.mjs` ALL PASS
+(20 assertions across a filtered scan, a genuine shortfall, and a filtered scan
+that hit the ceiling).

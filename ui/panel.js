@@ -13,6 +13,7 @@
 
 import * as store from '../lib/store.js';
 import * as filters from '../lib/filters.js';
+import * as streams from '../lib/streams.js';
 import { computeBuildId } from '../lib/build.js';
 import * as execute from '../lib/execute.js';
 
@@ -186,6 +187,69 @@ function summariseConnection(d) {
     'Connect again. Diagnostics below has the detail.';
 }
 
+/**
+ * The one line a stranger reads.
+ *
+ * Plain language, no operation names, no entry-type jargon: what was scanned,
+ * how many were found, how many match, what was left out. Everything else is
+ * in Scan details, unchanged.
+ *
+ * SEVERITY HAS TO MEAN SOMETHING. Red is reserved for a stream that was walked
+ * and came up short, a ceiling, a failure, an unknown account total on a full
+ * scan, or cross-stream duplicates. A correct scan that covered exactly what
+ * the user asked for shows no warning colour, so that when the red one does
+ * appear it still carries weight.
+ */
+function renderScanSummary(j, c, warning) {
+  const el = $('scan-summary');
+  const caveat = $('scan-caveat');
+  const details = $('scan-details');
+
+  const anyDetail = Boolean(c) || (j.streams || []).some((s) => s.termination);
+  details.hidden = !anyDetail;
+
+  if (!c) {
+    el.hidden = true;
+    caveat.hidden = true;
+    return;
+  }
+
+  const list = (arr) => {
+    const a = (arr || []).slice();
+    if (a.length <= 1) return a[0] || '';
+    return a.slice(0, -1).join(', ') + ' and ' + a[a.length - 1];
+  };
+  const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+
+  const scanned = list(c.scopeStreams) || 'account';
+  const left = list(c.skippedStreams);
+
+  let text = 'Scanned your ' + scanned + '. ' + (j.enumerated || 0) + ' found, ' +
+    (j.matched || 0) + ' match your filters.';
+  if (left) text += ' ' + cap(left) + ' were not included.';
+
+  // Cross-stream duplicates are a defect signal in their own right and must
+  // reach the summary rather than sitting only in the details.
+  const dupeWarn = j.crossStreamDuplicates > 0
+    ? 'Some items arrived from two streams that should not overlap - see Scan details.'
+    : null;
+
+  const problems = [warning, dupeWarn].filter(Boolean);
+  el.className = problems.length ? 'banner bad' : 'banner';
+  el.textContent = problems.length ? text + ' ' + problems.join(' ') : text;
+  el.hidden = false;
+
+  // THE WEAKER CLAIM, VISIBLE. A filtered scan cannot be checked against a
+  // number, and the user is told that in the open rather than left to infer a
+  // clean sweep. Suppressed when a warning is showing, which already carries it.
+  if (c.claim && !problems.length) {
+    caveat.textContent = c.claim;
+    caveat.hidden = false;
+  } else {
+    caveat.hidden = true;
+  }
+}
+
 function renderJob(job) {
   const j = job || store.emptyJob();
   $('c-enum').textContent = j.enumerated || 0;
@@ -239,7 +303,7 @@ function renderJob(job) {
     const state = runState(j, cur);
     line.textContent =
       (cur ? 'stream ' + idx + ' of ' + j.streams.length + ' \u00b7 ' + cur.label +
-             ' \u00b7 ' + cur.op + ' \u00b7 ' + state
+             ' \u00b7 ' + state
            : 'streams ' + state) +
       (breakdown ? '   |   pages ' + (j.pages || 0) + ' (' + breakdown + ')' : '') +
       (cur && cur.rate && cur.rate.limit
@@ -268,22 +332,17 @@ function renderJob(job) {
 
   // DID THIS RUN ACTUALLY SEE THE ACCOUNT? A clean endReason per stream is not
   // an answer to that question. A run that reached a fraction of an account
-  // must never read as complete, so this gets the same prominence as any other
-  // incompleteness banner.
+  // must never read as complete. The full text lives in Scan details; when it
+  // exists at all, the summary line above turns red and carries it.
+  //
+  // ONE COPY OF THE RULE. This used to be a second, hand-maintained transcription
+  // of shortfallBanner() living in the UI - the same drift that the build-id
+  // separator caused. The module owns the wording; the panel renders it.
   const short = $('shortfall');
   const c = j.completeness;
-  if (c && c.unknownTotal) {
-    // Cannot assess is NOT the same as complete, and must not read like it.
-    short.textContent =
-      'LOWER BOUND: X reported no account total, so there is no way to tell whether this ' +
-      'run saw everything. ' + c.enumerated + ' item(s) enumerated. Completeness cannot be ' +
-      'assessed - do not read this as a complete sweep.';
-    short.hidden = false;
-  } else if (c && c.materialShortfall) {
-    short.textContent =
-      'INCOMPLETE: ' + c.enumerated + ' of ' + c.reportedTotal + ' items X reports for ' +
-      'this account (' + c.percent + '%). ' + c.shortfall + ' unaccounted for. ' +
-      (c.reason || '') + '. Do not treat these results as the full account.';
+  const warning = c ? streams.shortfallBanner(c) : null;
+  if (warning) {
+    short.textContent = warning;
     short.hidden = false;
   } else {
     short.hidden = true;
@@ -349,6 +408,14 @@ function renderJob(job) {
   const totals = (j.streams || [])
     .filter((s) => s.reportedTotal)
     .map((s) => s.label + ': X reports ' + s.reportedTotal);
+  // THE ACCOUNT TOTAL STILL HAS TO BE VISIBLE. It used to reach the screen only
+  // inside the red shortfall banner, so suppressing that banner for a correct
+  // filtered scan would have quietly taken the number away with it. It is
+  // demoted into the details, not deleted, and it carries its provenance.
+  if (j.reportedTotal) {
+    totals.unshift('X reports ' + j.reportedTotal + ' item(s) on this account' +
+      (j.reportedTotalSource ? ' (source: ' + j.reportedTotalSource + ')' : ''));
+  }
   if (Object.keys(rej).length || totals.length) {
     skipped.textContent =
       (Object.keys(rej).length
@@ -359,6 +426,9 @@ function renderJob(job) {
   } else {
     skipped.hidden = true;
   }
+
+  // LAST, because it summarises everything above it.
+  renderScanSummary(j, c, warning);
 }
 
 /**

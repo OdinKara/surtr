@@ -155,8 +155,16 @@ ok(!S.isExpectedOverlap('reposts', 'replies'), 'reposts/replies overlap is NOT e
     streams: [done('posts', 480), { key: 'replies', label: 'replies', status: 'skipped' }],
     enumerated: 480, reportedTotal: 2616,
   });
-  ok(c.complete === false && /skipped/.test(c.reason || ''),
-     'a skipped stream blocks complete and is named as the reason');
+  // THIS ASSERTION USED TO SAY complete === false BECAUSE A STREAM WAS SKIPPED,
+  // and that was the defect written down as a test - the second time a test in
+  // this file has encoded the bug it was meant to catch. A stream the USER
+  // excluded is scope, not shortfall. Compare what was walked, not the account.
+  ok(c.complete === true,
+     'a stream SKIPPED BY THE FILTER is scope, not incompleteness - the walked stream ' +
+     'ran clean, so the scan is complete for what it covered');
+  ok(c.scopeFiltered === true && c.skippedStreams.join() === 'replies' &&
+     c.scopeStreams.join() === 'posts',
+     'and the run says plainly which streams were in scope and which were left out');
 
   c = S.completeness({
     streams: [done('posts', 480), { key: 'replies', label: 'replies', status: 'failed',
@@ -190,6 +198,118 @@ ok(!S.isExpectedOverlap('reposts', 'replies'), 'reposts/replies overlap is NOT e
   });
   ok(/cause unknown/.test(c.reason || ''),
      'a shortfall with every stream complete says the cause is UNKNOWN rather than inventing one');
+
+  /* -------------------------------------------- filtered scope, in detail --- */
+
+  // The live defect: a deliberate posts-only scan reported "23 of 2035 (1%),
+  // 2012 unaccounted for" in red. Every one of those 2,012 was excluded by the
+  // user's own filter.
+  const postsOnly = S.completeness({
+    streams: [
+      done('posts', 23),
+      { key: 'reposts', label: 'reposts', status: 'skipped' },
+      { key: 'replies', label: 'replies', status: 'skipped' },
+    ],
+    enumerated: 23, reportedTotal: 2035,
+  });
+  ok(postsOnly.complete === true && postsOnly.materialShortfall === false,
+     'a posts-only scan that walked posts to a clean end is COMPLETE FOR ITS SCOPE');
+  ok(postsOnly.percent === null && postsOnly.shortfall === null,
+     'NO PERCENTAGE AND NO SHORTFALL: there is no in-scope denominator, so any number ' +
+     'here would be arithmetic against the wrong total');
+  ok(postsOnly.reportedTotal === 2035,
+     'the account total is still reported unchanged - it is shown, just not used as a ' +
+     'denominator');
+  ok(S.shortfallBanner(postsOnly) === null,
+     'AND IT RAISES NO RED BANNER. Severity has to mean something: a routine, correct, ' +
+     'complete-for-its-scope scan that shows red teaches the user to ignore red');
+  ok(postsOnly.reason === null, 'nothing is offered as a reason, because nothing is wrong');
+
+  // THE WEAKER CLAIM MUST SOUND WEAKER. This is the whole point of the split:
+  // a filtered scan must never borrow the confidence of the full comparison.
+  ok(typeof postsOnly.claim === 'string' && postsOnly.claim.length > 0,
+     'a filtered scan carries its caveat in `claim`, so the UI renders the one wording ' +
+     'rather than deriving a second copy of the rule');
+  ok(!/%/.test(postsOnly.claim),
+     'the filtered claim states NO percentage - it cannot, and must not imply it can');
+  ok(/no per-stream totals/.test(postsOnly.claim) &&
+     /NOT a claim that your account holds nothing else/.test(postsOnly.claim),
+     'the claim says out loud why there is no number to check against, and refuses the ' +
+     'stronger reading explicitly');
+  ok(/reposts and replies/.test(postsOnly.claim) && /not included/.test(postsOnly.claim),
+     'and it names the streams that were left out, as SCOPE');
+
+  const fullScope = S.completeness({
+    streams: [done('posts', 480), done('reposts', 124), done('replies', 2000)],
+    enumerated: 2604, reportedTotal: 2616,
+  });
+  ok(fullScope.scopeFiltered === false && fullScope.claim === null &&
+     fullScope.percent === 100,
+     'THE FULL-SCOPE PATH IS UNTOUCHED: it still computes the percentage and makes the ' +
+     'stronger claim, so the two cases read differently');
+
+  // A stream that WAS walked and came up short still warns, filtered or not.
+  const filteredCeiling = S.completeness({
+    streams: [
+      { key: 'posts', label: 'posts', status: 'done', enumerated: 3200,
+        ceilingSuspected: true },
+      { key: 'replies', label: 'replies', status: 'skipped' },
+    ],
+    enumerated: 3200, reportedTotal: 9000,
+  });
+  ok(filteredCeiling.complete === false,
+     'a WALKED stream that hit the ceiling is still incomplete, filter or no filter');
+  ok(/INCOMPLETE FOR WHAT WAS SCANNED/.test(S.shortfallBanner(filteredCeiling) || ''),
+     'and it does raise a banner - the red is kept for the case that earns it');
+  ok(filteredCeiling.percent === null,
+     'but still without a percentage, because the denominator is still wrong');
+
+  const filteredFail = S.completeness({
+    streams: [
+      done('posts', 10),
+      { key: 'reposts', label: 'reposts', status: 'failed', enumerated: 2 },
+      { key: 'replies', label: 'replies', status: 'skipped' },
+    ],
+    enumerated: 12, reportedTotal: 500,
+  });
+  ok(filteredFail.complete === false && /failed/.test(filteredFail.reason || ''),
+     'a FAILED in-scope stream blocks complete under a filter too, and is named');
+
+  const filteredNoTotal = S.completeness({
+    streams: [done('posts', 7), { key: 'replies', label: 'replies', status: 'skipped' }],
+    enumerated: 7, reportedTotal: null,
+  });
+  ok(filteredNoTotal.complete === true && filteredNoTotal.unknownTotal === true,
+     'a filtered scan does not rest on the account total, so an absent total neither ' +
+     'weakens nor strengthens it - the claim was never about the account');
+  ok(S.shortfallBanner(filteredNoTotal) === null,
+     'and the LOWER BOUND banner does not fire either, because nothing here was ' +
+     'measured against that total');
+
+  const nothingScanned = S.completeness({
+    streams: [
+      { key: 'posts', label: 'posts', status: 'skipped' },
+      { key: 'replies', label: 'replies', status: 'skipped' },
+    ],
+    enumerated: 0, reportedTotal: 100,
+  });
+  ok(nothingScanned.complete === false,
+     'if EVERY stream was filtered out, nothing was scanned and nothing is complete');
+  ok(/say nothing about your account/.test(nothingScanned.claim || ''),
+     'and it says so rather than reporting a clean empty sweep');
+
+  /* --------------------------------------------------- streamRanClean --- */
+
+  ok(S.streamRanClean({ status: 'done' }) === true,
+     'a done stream with no qualifying end reason ran clean');
+  ok(S.streamRanClean({ status: 'done', ceilingSuspected: true }) === false &&
+     S.streamRanClean({ status: 'done', endReason: 'page-limit' }) === false &&
+     S.streamRanClean({ status: 'done', endReason: 'cursor-repeat' }) === false &&
+     S.streamRanClean({ status: 'done', endReason: 'stopped' }) === false,
+     'ceiling, page bound, repeated cursor and a user stop each make the count a FLOOR');
+  ok(S.streamRanClean({ status: 'failed' }) === false &&
+     S.streamRanClean(null) === false,
+     'a failed stream and a missing stream are both not-clean');
 
   ok(S.shortfallBanner({ materialShortfall: false }) === null,
      'no banner when there is no material shortfall');
@@ -320,7 +440,7 @@ ok(S.overallStatus([{ status: 'failed', enumerated: 0 }, { status: 'failed', enu
  *
  * Raise this when adding tests. If it fails after a refactor, tests were lost.
  */
-const MIN_ASSERTIONS = 62;
+const MIN_ASSERTIONS = 82;
 ok(passes + 1 >= MIN_ASSERTIONS,
    'assertion count ' + (passes + 1) + ' is at or above the floor of ' + MIN_ASSERTIONS +
    ' - if this fails, tests were deleted rather than fixed');
