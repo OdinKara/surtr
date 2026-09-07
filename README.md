@@ -451,18 +451,34 @@ The Reposts tab is empty. Five of the 119 reposts had already been unretweeted
 by the earlier tests and still returned success — the already-gone limitation
 above, observed rather than theorised.
 
-**The external check, including the part that does not reconcile.** X's own
-reported account total moved **2,616 → 2,035** over the session. That is a drop
-of **581** against **576 deleted**: the direction and magnitude corroborate the
-tool's own count, and **the 5-item difference is not accounted for.** It could be
-X counting reposts differently from this tally, a lagging count, or something
-deleted from another client — none of which has been verified, so none of them is
-written down as the answer.
+**The external check reconciles exactly — once you know why the count reads
+low.** X's own reported account total moved **2,616 → 2,035** over the session, a
+drop of **581** against **576 deleted**. Those 5 are not missing deletions. They
+are 5 reposts undone during `DeleteRetweet`'s first test runs, **before that
+operation's success shape had been confirmed**, so they graded `unverified` and
+were excluded from the deleted count by design. X counted them; Surtr declined
+to.
 
-It is stated rather than rounded away because a 99% reconciliation reported as
-exact is the same class of mistake as a run reporting `complete` having seen 23%
-of an account: close enough to be reassuring, which is precisely why the gap has
-to be said out loud.
+Checked against the kill logs rather than assumed — 581 distinct
+`(operation, target)` pairs were dispatched against, the 5 appear in no other
+run, and nothing is double-counted:
+
+```
+457 DeleteTweet + 119 DeleteRetweet = 576   what Surtr reported deleted
+457 DeleteTweet + 124 DeleteRetweet = 581   what X's account total moved
+```
+
+**This is worth understanding before you trust any deleted count, including your
+own.** A `200` is not proof of deletion, so Surtr never counts an item whose
+operation has no confirmed success shape. The consequence is arithmetical:
+
+> Any deleted total computed before an operation's success shape was confirmed
+> reads **low** against X's own accounting — by exactly the number of items that
+> operation dispatched successfully while still unverified.
+
+The count is conservative on purpose, and conservative means biased, not merely
+cautious. The tool would rather under-claim than tell you something is gone
+when it cannot prove it.
 ---
 
 ## Install (unpacked)

@@ -2068,20 +2068,69 @@ rate-limit as a failure; they were re-dispatched after the window and deleted.
 5 of the 119 reposts had already been unretweeted by the earlier tests and still
 returned success - the already-gone limitation, observed rather than theorised.
 
-### The external check, and the part of it that does not reconcile
+### The external check, and the 5 that were missing from it
 
 X's own reported account total moved **2,616 -> 2,606 -> 2,035** across the
-session. That is a drop of **581** against **576 deleted**, and the direction and
-magnitude corroborate the tool's own count.
+session. That is a drop of **581** against **576 deleted**.
 
-**The 5-item difference is not accounted for.** Candidates: X's `tweet_counts`
-may include or exclude reposts differently from the way this tally does; the
-count may lag; something may have been deleted from another client during the
-session. None of these has been verified, so none is written down as the answer.
-It is recorded as an open discrepancy because a 99% reconciliation reported as
-exact is the same class of error as a run reporting `complete` at 23% - the
-number is close enough to be reassuring and that is exactly why the gap has to
-be stated rather than rounded away.
+**RECONCILED, from the kill-log records.** The gap is exactly the 5 reposts of
+the first `DeleteRetweet` test runs, dispatched **before that operation's success
+shape was confirmed**. They graded `unverified`, which is excluded from the
+deleted count by design - and they were real unretweets that X counted.
+
+Measured across all twelve exported kill logs, by distinct `(operation, target)`
+pair:
+
+| operation | successy | unverified-only | failed-only | distinct targets |
+|---|---|---|---|---|
+| `DeleteTweet` | 452 | 5 | 0 | **457** |
+| `DeleteRetweet` | 118 | 5 | 1 | **124** |
+
+- `DeleteTweet` 457 = the 447-item posts run plus the two 5-item tests. All 457
+  are in the reported total.
+- `DeleteRetweet` 124 = the counted 119-item run (run `qp6x74`) plus **5 targets
+  that appear in no other run**, all `testMode: true`, all HTTP 200 with a
+  `data.unretweet` body, spread across three earlier test runs. They share no
+  run with any of the 118 successes, so nothing is double-counted.
+
+```
+457 + 119 = 576   what Surtr reported deleted
+457 + 124 = 581   what X's account total moved
+```
+
+The difference is those 5, exactly.
+
+### Why the count read low: `unverified` is excluded by design
+
+This is a **measurement artefact, not a discrepancy in what happened.** Nothing
+went wrong with the deletions; the tool declined to claim them.
+
+`unverified` exists because a `200` is not proof of deletion, so an item whose
+operation has no confirmed success shape is never counted as deleted. That rule
+is right and stays. Its consequence is arithmetical and worth stating plainly:
+
+> **Any deleted total computed before an operation's success shape was confirmed
+> reads LOW against X's own accounting** - by exactly the number of items that
+> operation dispatched successfully while still unverified.
+
+The two operations show it symmetrically. Each has exactly 5 unverified-only
+targets, and each set is that operation's first test run: `DeleteTweet`'s 5 at
+02:05, `DeleteRetweet`'s across three runs from 02:32. In both cases the shape
+was captured *from those very responses* and encoded immediately after, so every
+later item of that operation graded properly. `DeleteTweet`'s 5 were hand-checked
+at the time and counted anyway; `DeleteRetweet`'s were not, which is the whole
+of the gap.
+
+The general form, worth carrying to any grading scheme: **a conservative grade is
+a bias, not just a caution.** A grade that refuses to claim an outcome makes the
+totals systematically low, and if the totals are ever reconciled against an
+external source the residual will be exactly the conservative bucket. Reconcile
+against the bucket before reaching for an explanation.
+
+Recorded also because it argues for the kill log: this was answerable at all
+only because every dispatch was written down **before** it was sent, with its
+grade, HTTP status and raw body retained. A tool that logged only its successes
+could not have reconciled its own count.
 
 ### The audit instructions caught their own author first
 
@@ -2132,3 +2181,29 @@ that way.
   cosmetic typo fix is a bad deal.
 
 Suite: parser 69, streams 90, execute 206, build 27.
+
+### 2026-09-07 - The 581/576 gap reconciles exactly
+
+Checked against the twelve exported kill logs rather than assumed. 581 distinct
+`(operation, target)` pairs were dispatched against; the reported total counted
+576 of them. The 5 missing are `DeleteRetweet` items from that operation's first
+test runs, dispatched before its success shape was confirmed, graded
+`unverified` and therefore excluded from the deleted count by design. They
+appear in no other run, so nothing was double-counted.
+
+- **A measurement artefact, not a discrepancy in what happened.** The deletions
+  all worked; the tool declined to claim 5 of them.
+- **A conservative grade is a bias, not just a caution.** Any total computed
+  before an operation's shape is confirmed reads low against external
+  accounting, by exactly the size of the conservative bucket. Both operations
+  show it, symmetrically: 5 unverified-only targets each, each set being that
+  operation's own first test run.
+- **The kill log is what made this answerable.** Every dispatch was written down
+  before it was sent, with grade, HTTP status and raw body retained. A tool that
+  logged only successes could not reconcile its own count.
+- The one `DeleteRetweet` target graded `failed` on an absent echo is inside the
+  counted 119 - it is the item that produced the `unverified-ok` grade.
+
+The analysis read the logs **in place** in Downloads. Nothing was copied into the
+tree, and only counts and grades were reported - the logs hold the full text of
+posts that exist nowhere else.
