@@ -21,3 +21,16 @@ logs/
 # exists in case one is ever moved into the tree.
 surtr-report-*.json
 surtr-report-*.csv
+
+# Kill logs. THE MOST SENSITIVE FILE THIS TOOL PRODUCES: the full text, ids and
+# permalinks of posts that no longer exist anywhere else. It is the only record
+# of what was destroyed, which is exactly why it must never become a commit.
+surtr-killlog-*.json
+surtr-killlog-*.csv
+
+# Captured API responses. Kept out of the tree on purpose - a single X GraphQL
+# response body carries the account's numeric user id and the full text of
+# posts, including other people's. Read a capture in place; never copy one in.
+*-response.json
+*-capture.json
+surtr-capture-*.json
