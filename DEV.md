@@ -1972,3 +1972,37 @@ Suite: parser 69, streams 85, execute 206, build 27.
 Harnesses: `ui_pass_test.mjs` ALL PASS, new `scan_panel_test.mjs` ALL PASS
 (20 assertions across a filtered scan, a genuine shortfall, and a filtered scan
 that hit the ceiling).
+
+### The same wrong reading, one function over
+
+`overallStatus()` returned `partial` for done + skipped, so a deliberate
+posts-only scan reported **"streams finished (partial)"** - telling the user
+something had gone half-done when nothing had. It is the completeness defect
+again, in a different function: a stream the user excluded read as a gap.
+
+PARTIAL now means what it says: a stream FAILED, was stopped, or came up short.
+A skipped stream is scope and does not affect the verdict.
+
+The judgement is `streamRanClean()`, the same predicate `completeness()` uses,
+deliberately shared so the two cannot drift apart on what "finished" means -
+which is the whole reason the in-scope rule went into `lib/` rather than being
+re-derived per caller.
+
+**One behaviour tightened beyond the ask.** The old rule looked only at
+`status`, so a stream that reached X's ~3,200 ceiling was `DONE` and the run
+reported `done`. Under `streamRanClean()` that is now `partial`, which is the
+strict direction and consistent with what the per-stream report has always
+said. No gate moves: `renderExec` accepts `JOB_DONE` and `JOB_PARTIAL`
+identically, so nothing becomes armable or unarmable either way.
+
+### 2026-09-07 - overallStatus stops calling a filtered scan half-done
+
+- `overallStatus()`: skipped-by-filter no longer forces `partial`; reuses
+  `streamRanClean()` rather than re-deriving the rule.
+- A ceiling, page bound, repeated cursor, user stop or failure still means
+  `partial`. Every stream filtered out still means `partial` - nothing ran.
+- One existing assertion changed because it encoded the old reading. That is
+  the **third** in this file, which is why it is now a standing gotcha rather
+  than a per-incident note.
+
+Suite: parser 69, streams 91, execute 206, build 27.

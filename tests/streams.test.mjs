@@ -420,8 +420,31 @@ ok(bdSkip.text === 'posts 4', 'a skipped stream is not listed in the page breakd
 
 ok(S.overallStatus([{ status: 'done', enumerated: 5 }, { status: 'done', enumerated: 5 }]) === 'done',
    'both done -> done');
-ok(S.overallStatus([{ status: 'done', enumerated: 5 }, { status: 'skipped' }]) === 'partial',
-   'done + skipped -> PARTIAL, because the run did less than a full sweep');
+// THIS ASSERTION USED TO EXPECT 'partial', on the reasoning that a skipped
+// stream means "less than a full sweep". That is the same conflation the
+// completeness fix removed: the user excluded that stream on purpose, and
+// telling them the run half-finished is telling them something is wrong when
+// nothing is. Third assertion in this file to encode the reading it was
+// checking - see DEV.md.
+ok(S.overallStatus([{ status: 'done', enumerated: 5 }, { status: 'skipped' }]) === 'done',
+   'done + SKIPPED-BY-FILTER -> DONE. A stream the user excluded is scope, not a ' +
+   'half-finished run');
+ok(S.overallStatus([{ status: 'done', enumerated: 5, ceilingSuspected: true },
+                    { status: 'skipped' }]) === 'partial',
+   'but a walked stream that hit the CEILING is still partial, filter or no filter');
+ok(S.overallStatus([{ status: 'done', enumerated: 5, endReason: 'stopped' }]) === 'partial' &&
+   S.overallStatus([{ status: 'done', enumerated: 5, endReason: 'page-limit' }]) === 'partial' &&
+   S.overallStatus([{ status: 'done', enumerated: 5, endReason: 'cursor-repeat' }]) === 'partial',
+   'a user stop, the page bound and a repeated cursor each keep the run PARTIAL - ' +
+   'PARTIAL means something came up short, which is what it should have meant all along');
+ok(S.overallStatus([{ status: 'done', enumerated: 5, ceilingSuspected: true }]) === 'partial',
+   'and a ceiling on a FULL-scope run is partial too - this used to read as done, ' +
+   'because the old rule only ever looked at the status field');
+ok(S.overallStatus([{ status: 'skipped' }, { status: 'skipped' }]) === 'partial',
+   'every stream filtered out -> PARTIAL: nothing ran, so nothing finished');
+ok(S.overallStatus([{ status: 'done', enumerated: 5 }, { status: 'failed', enumerated: 0 },
+                    { status: 'skipped' }]) === 'partial',
+   'a FAILED stream still makes the run partial when a filter is also in play');
 ok(S.overallStatus([{ status: 'done', enumerated: 5 }, { status: 'failed', enumerated: 2 }]) === 'partial',
    'one failed but data was enumerated -> PARTIAL, not error');
 ok(S.overallStatus([{ status: 'failed', enumerated: 0 }, { status: 'failed', enumerated: 0 }]) === 'error',
@@ -440,7 +463,7 @@ ok(S.overallStatus([{ status: 'failed', enumerated: 0 }, { status: 'failed', enu
  *
  * Raise this when adding tests. If it fails after a refactor, tests were lost.
  */
-const MIN_ASSERTIONS = 82;
+const MIN_ASSERTIONS = 88;
 ok(passes + 1 >= MIN_ASSERTIONS,
    'assertion count ' + (passes + 1) + ' is at or above the floor of ' + MIN_ASSERTIONS +
    ' - if this fails, tests were deleted rather than fixed');
