@@ -521,6 +521,15 @@ Four files, **392 assertions**, no dependencies and no test runner — plain
 edit silently deleted about fifty assertions and the suite still printed
 `ALL PASS`. A suite that cannot notice its own removal is not a safety net.
 
+## Support
+
+Surtr is free and AGPL-licensed, and nothing in it is held back — no paid tier,
+no key, no feature behind a wall. If it saved you an afternoon of clicking, there
+is a tip jar at
+[donate.grimnirworks.com](https://donate.grimnirworks.com/), also reachable from
+the heart in the panel header. Bug reports and pull requests are worth just as
+much.
+
 ## Contributing
 
 Issues and pull requests welcome. Two rules that are not negotiable:
