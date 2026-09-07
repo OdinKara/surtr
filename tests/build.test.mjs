@@ -36,8 +36,17 @@ function walk(dir, out = []) {
   return out;
 }
 
+// TEXT FILES ONLY. The check exists to catch an invisible byte inside source
+// that reads as ordinary text; a PNG is legitimately full of control bytes and
+// scanning one only produces noise that trains you to ignore the check. The
+// list is an allow-list of binary extensions rather than a skip of whole
+// directories, so a stray .js under icons/ is still scanned.
+const BINARY = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.woff',
+  '.woff2', '.ttf', '.otf', '.zip', '.crx', '.pdf']);
+
 const offenders = [];
 for (const abs of walk(ROOT)) {
+  if (BINARY.has(path.extname(abs).toLowerCase())) continue;
   const b = fs.readFileSync(abs);
   for (let i = 0; i < b.length; i += 1) {
     const c = b[i];
