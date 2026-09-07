@@ -466,6 +466,16 @@ ok(E.configFingerprint({ keepIdList: ['1'] }) !== E.configFingerprint({ keepIdLi
   ok(two.dispatch.length === 2, 'distinct targets are both dispatched');
 }
 
+/* ------------------------------------ NO AUTOMATIC DOWNLOADS --- */
+
+// The kill-log auto-download was REMOVED, not gated. There is no decision left
+// to make: the only way the log reaches disk is a button the user clicks. This
+// assertion exists so that re-introducing one fails a test rather than passing
+// review.
+ok(!('shouldOfferKillLog' in E) && !('recordOffered' in E),
+   'the auto-offer helpers are DELETED, not merely unused - there is no flag left ' +
+   'that could re-enable an automatic write of deleted-post text to disk');
+
 /* ------------------------------------------- RAW BODY RETENTION --- */
 
 {

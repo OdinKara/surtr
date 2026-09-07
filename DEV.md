@@ -17,9 +17,11 @@ Handoff file. Read this first; it should be enough to resume without asking.
 0 cross-stream duplicates; 0 foreign permalinks across 898 matched; 2 rate
 limits on the replies stream, both recovered, all items retrieved.
 
-**PHASE 2 IS BUILT AND HAS NEVER BEEN RUN.** Deletion is possible in this
-build. The next step is the 5-item test run; full runs are locked until it has
-been done and confirmed by hand. See "Phase 2" below before touching it.
+**PHASE 2 IS BUILT AND VALIDATED ON TEST RUNS.** Deletion is possible in this
+build. Both write operations have success shapes confirmed against live
+responses. Two 5-item test runs have been executed and verified by hand; full
+runs remain locked behind the attestation. See "Phase 2" below before touching
+it.
 
 **Phase 1 scaffold complete and committed.** Repo is **private** on GitHub as
 `OdinKara/surtr`, and stays private until the scanner is validated.
@@ -524,50 +526,40 @@ Full runs are locked behind an **attestation**, not a check the tool can make:
 Surtr cannot verify from here that a post is gone, so the user confirms by hand
 and ticks the box. It is labelled as an attestation rather than a verification.
 
-### PRIVACY DEFECT: the kill log auto-downloaded on panel open
+### PRIVACY: the kill log is never written to disk automatically
 
-**Five `surtr-killlog-*.json` files landed in Downloads from opening the side
-panel**, after a single run. Each contained the FULL TEXT of deleted posts.
+The auto-download is **gone**, not gated.
 
-This is recorded as a privacy defect, not a papercut. The kill log exists to
-hold what was destroyed, which makes it the most sensitive artefact this tool
-produces, and it was being written to disk silently on a UI event nobody asked
-for. Somebody who opened the panel five times to check on a scan ended up with
-five copies of their own deleted post text sitting in a folder they did not
-choose. Nothing warned them, and nothing would have.
+The first version wrote it on run completion. That turned out to also fire on
+panel *open* - a persisted condition read as an event - and **five
+`surtr-killlog-*.json` files landed in Downloads from opening the side panel**
+after a single run, each containing the FULL TEXT of deleted posts.
 
-**Cause: a persisted condition read as an event.** The auto-offer was guarded by
-a module-scope flag, which is reset to undefined on every panel load. The panel
-rehydrates from `chrome.storage.local` on open, saw a completed run with a log
-attached, and treated "a completed run exists" as "a run just completed".
+The gating bug was fixed first. Then the feature was removed altogether, which
+was the right call and the fix should have gone there directly: **no amount of
+gating makes an automatic write the user's decision rather than the tool's.**
+The kill log carries the text, ids and permalinks of destroyed posts, and it is
+not this tool's call when that reaches a filesystem.
 
-That is the same shape as the dead run that kept rendering as live, and as the
-counter that never reset at the window boundary: **state mistaken for a
-transition.** Three instances now, in three different parts of the code, so it
-is worth naming as a pattern rather than fixing case by case. The tell is a
-boolean that lives only in memory guarding an action whose trigger is persisted.
+The helpers are **deleted**, not left unused - there is no flag that a future
+change could flip back on, and a test asserts they are absent so a
+re-introduction fails CI rather than passing review.
 
-**The fix requires all three of:**
+**In their place, a reminder.** When a run terminates - complete, stopped, or
+aborted - the panel shows a prominent banner directly above the download
+buttons:
 
-1. a terminal run status
-2. the run was dispatched **by this panel session** - a set of run ids held only
-   in memory, deliberately not persisted, so that after a reload it is empty and
-   a rehydrated run cannot look like a fresh completion
-3. no record of having offered it before, checked against a **persisted** list
-   of run ids, so a reload cannot resurrect the offer
+> THE KILL LOG HAS NOT BEEN SAVED. N entries recording what this run destroyed -
+> the full text, ids and permalinks - exist only in this extension's storage.
+> This is the ONLY record. Download it now.
 
-The record is written BEFORE the download, so a failure to save cannot produce a
-loop of repeated offers. Only run ids are persisted - never post text.
+Once downloaded in the same session it changes to a quieter confirmation. That
+flag is **session-only and conservative**: after a reload the panel cannot know
+whether the file was kept, so it warns again. Over-reminding costs a glance;
+under-reminding costs the only record of what was destroyed.
 
-The manual download buttons are untouched: retrieving the log later is a
-deliberate act and always available.
-
-Covered two ways. `tests/execute.test.mjs` pins the rule, including that a
-persisted offer survives a reload. A browser test seeds exactly the reported
-state - one completed run, a populated kill log, no offer recorded - opens the
-panel three times and asserts the download directory stays **empty**, then that
-the manual button still works, then that a reload after a manual download does
-not add another file.
+A reminder does everything the automatic download did except the part that was
+wrong.
 
 ### The audit that came with it
 
@@ -1660,3 +1652,26 @@ Suite: parser 68, streams 62, execute 172, build 26, filters 23.
 - Hazard asserted: a tweet id does not survive `Number()`.
 
 Suite: parser 68, streams 62, execute 121, build 26, filters 23.
+
+### 2026-09-06 — Kill log: reminder instead of automatic download
+
+The auto-download is removed entirely rather than gated. The helpers are
+deleted, the persisted flag and its storage key are gone, and a test asserts
+they stay gone so a re-introduction fails rather than passing review.
+
+In their place the panel shows a prominent banner when a run terminates, above
+the download buttons, saying the log has not been saved and is the only record.
+After a deliberate download it becomes a quieter confirmation; after a reload it
+warns again, because the panel cannot know the file was kept.
+
+The principle, now stated once rather than re-derived: the user decides when
+personal data hits the filesystem, always. Gating an automatic write does not
+make it a decision.
+
+**The posts 5-item test passed**: 5 dispatched, **5 DELETED**, 0 unverified, 0
+failed. DeleteTweet's encoded success shape grades live responses correctly.
+X's reported account total dropped 2611 -> 2606, independently confirming both
+test runs landed - which also means the account total is a usable external check
+on a run, not just a completeness denominator.
+
+Suite: parser 68, streams 62, execute 122, build 26, filters 23.

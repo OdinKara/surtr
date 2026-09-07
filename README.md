@@ -21,7 +21,9 @@ Licensed [AGPL-3.0](LICENSE).
 >
 > The **kill log** records every item *before* its delete request is sent, so a
 > crash still leaves a record of what was attempted. It is the only record of
-> what was destroyed. Download it.
+> what was destroyed, and Surtr never writes it to disk on its own — when a run
+> ends it says so and puts the download buttons in front of you. Deciding when
+> your deleted posts reach a filesystem is yours, not the tool's.
 
 ---
 

@@ -681,12 +681,14 @@ let execSession = null;
 let execPlanCount = 0;
 
 /**
- * Runs dispatched by THIS panel session.
+ * Has the kill log been saved during THIS panel session?
  *
- * Deliberately not persisted: its whole purpose is to be empty after a reload,
- * so a rehydrated completed run cannot be mistaken for one that just finished.
+ * Session-only, and conservative by design: after a reload we cannot know
+ * whether the file still exists or was ever kept, so the reminder goes back to
+ * saying it has NOT been saved. Over-reminding costs a glance; under-reminding
+ * costs the only record of what was destroyed.
  */
-const dispatchedRunIds = new Set();
+let killLogSavedThisSession = false;
 
 async function refreshExecute() {
   const job = await store.readJob();
@@ -852,35 +854,56 @@ function renderExec(x) {
     u.hidden = true;
   }
 
-  // The kill log is the only record, so it is offered without being asked -
-  // but ONLY on the transition into completion, and only for a run this panel
-  // session actually dispatched. Reading "a completed run exists" as "a run
-  // just completed" wrote the full text of deleted posts to disk every time
-  // the panel was opened. See execute.shouldOfferKillLog.
-  maybeOfferKillLog(x);
+  // NOTHING IS DOWNLOADED AUTOMATICALLY. The reminder below is the entire
+  // mechanism - see the note in lib/execute.js.
+  updateKillLogReminder(x);
 }
 
-/** Fire-and-forget so renderExec stays synchronous. */
-function maybeOfferKillLog(x) {
-  if (!x) return;
+/**
+ * Remind, do not act.
+ *
+ * When a run ends, the kill log is the only record of what was destroyed, and
+ * losing it is unrecoverable. That justifies a loud reminder; it does not
+ * justify writing the full text of deleted posts to somebody's disk on an event
+ * they did not ask for.
+ */
+function updateKillLogReminder(x) {
+  const el = $('killlog-reminder');
+  if (!el) return;
+  const terminal = x && x.status && x.status !== 'running';
+  if (!terminal) {
+    el.hidden = true;
+    return;
+  }
   (async () => {
-    const offered = (await store.get(store.KEY.KILLLOG_OFFERED)) || [];
-    if (!execute.shouldOfferKillLog({
-      status: x.status,
-      runId: x.runId,
-      dispatchedThisSession: dispatchedRunIds.has(x.runId),
-      alreadyOffered: offered.includes(x.runId),
-    })) return;
-    // Record BEFORE downloading, so a failure to save cannot produce a loop of
-    // repeated offers.
-    await store.set(store.KEY.KILLLOG_OFFERED, execute.recordOffered(offered, x.runId));
-    await downloadKillLog('json');
+    const log = (await store.get('surtr:killlog')) || [];
+    if (log.length === 0) {
+      el.hidden = true;
+      return;
+    }
+    if (killLogSavedThisSession) {
+      el.className = 'banner';
+      el.textContent =
+        'Kill log saved this session (' + log.length + ' entr' +
+        (log.length === 1 ? 'y' : 'ies') + '). It is still the only record of what was ' +
+        'destroyed - keep the file somewhere you will find it.';
+    } else {
+      el.className = 'banner bad';
+      el.textContent =
+        'THE KILL LOG HAS NOT BEEN SAVED. ' + log.length + ' entr' +
+        (log.length === 1 ? 'y' : 'ies') + ' recording what this run destroyed - the full ' +
+        'text, ids and permalinks - exist only in this extension\u2019s storage. This is ' +
+        'the ONLY record. Download it now.';
+    }
+    el.hidden = false;
   })();
 }
 
 async function downloadKillLog(kind) {
   const log = await store.get('surtr:killlog');
   if (!log || log.length === 0) return;
+  // Only a deliberate download sets this, which is the only kind there is.
+  killLogSavedThisSession = true;
   if (kind === 'csv') {
     download(killlog_toCsv(log), 'text/csv', 'surtr-killlog-' + stamp() + '.csv');
     return;
@@ -940,8 +963,6 @@ async function dispatchExecute(testMode) {
     payload.confirmCount = execute.selectTestItems(matched).length;
   }
   const r = await send(payload);
-  // Only a run THIS session dispatched may be auto-offered on completion.
-  if (r && r.runId) dispatchedRunIds.add(r.runId);
   if (!r.ok) {
     $('exec-blocked').textContent = 'EXECUTION REFUSED: ' + (r.error || 'unknown');
     $('exec-blocked').hidden = false;
@@ -965,8 +986,14 @@ $('btn-execute').addEventListener('click', async () => {
 });
 
 $('btn-exec-stop').addEventListener('click', async () => { await send({ type: 'SURTR_STOP' }); });
-$('btn-kill-json').addEventListener('click', () => downloadKillLog('json'));
-$('btn-kill-csv').addEventListener('click', () => downloadKillLog('csv'));
+$('btn-kill-json').addEventListener('click', async () => {
+  await downloadKillLog('json');
+  updateKillLogReminder(await store.get(store.KEY.EXEC));
+});
+$('btn-kill-csv').addEventListener('click', async () => {
+  await downloadKillLog('csv');
+  updateKillLogReminder(await store.get(store.KEY.EXEC));
+});
 
 $('test-verified').addEventListener('change', async () => {
   await store.set(store.KEY.TEST_VERIFIED, $('test-verified').checked === true);
