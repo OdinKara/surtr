@@ -805,12 +805,37 @@ function renderExec(x) {
   $('x-fail').textContent = c.failed || 0;
 
   const st = $('exec-status');
+  // The word "complete" is reserved for a run that reached the end of its plan.
+  // Anything else says what it actually was, because "done" is the word someone
+  // remembers later when deciding whether the rest of their account is intact.
+  const verdict = execute.runIsComplete(x.status) ? 'complete'
+    : x.status === 'aborted' ? 'ABORTED - INCOMPLETE'
+    : x.status;
   st.textContent = 'run ' + x.runId + (x.testMode ? ' (TEST)' : '') + ' \u2014 ' +
-    x.status + ', ' + (x.done || 0) + ' of ' + x.total +
+    verdict + ', ' + (x.done || 0) + ' of ' + x.total + ' dispatched' +
     (x.rateLimited ? ' \u2014 RATE LIMITED, resuming in ' +
       countdown(x.rateLimited.resetAtMs) : '') +
-    (x.stoppedReason ? ' \u2014 ' + x.stoppedReason : '');
+    (x.stoppedReason && x.status !== 'aborted' ? ' \u2014 ' + x.stoppedReason : '');
   st.hidden = false;
+
+  // The abort banner. Prominent, and it carries the raw failure bodies, because
+  // those are what the next fix is made of.
+  const ab = $('exec-aborted');
+  if (x.abortedByBreaker && x.breaker) {
+    const b = x.breaker;
+    ab.textContent =
+      'RUN ABORTED BY THE CIRCUIT BREAKER after ' + (x.done || 0) + ' dispatched of ' +
+      x.total + ': ' + b.reason + '. ' +
+      (c.succeeded || 0) + ' succeeded, ' + (c.alreadyGone || 0) + ' already gone, ' +
+      (c.failed || 0) + ' failed. The remaining ' +
+      Math.max(0, (x.total || 0) - (x.done || 0)) + ' item(s) were NOT dispatched. ' +
+      'This run is NOT complete. Failures: ' +
+      (b.failures || []).map((f) => '[' + f.op + ' ' + f.targetId + ' HTTP ' + f.status +
+        '] ' + (f.raw || f.detail || '')).join('   ');
+    ab.hidden = false;
+  } else {
+    ab.hidden = true;
+  }
 
   const u = $('exec-unverified');
   const unconfirmed = execute.unconfirmedOperations();
@@ -858,11 +883,30 @@ async function downloadKillLog(kind) {
   if (!log || log.length === 0) return;
   if (kind === 'csv') {
     download(killlog_toCsv(log), 'text/csv', 'surtr-killlog-' + stamp() + '.csv');
-  } else {
-    download(JSON.stringify({ tool: 'Surtr', kind: 'kill-log', generatedAt:
-      new Date().toISOString(), entries: log }, null, 2),
-      'application/json', 'surtr-killlog-' + stamp() + '.json');
+    return;
   }
+  // The export states the run's REAL status. A kill log from an aborted run
+  // read later, out of context, must not look like the record of a completed
+  // sweep - that is the reading that would let somebody conclude the rest of
+  // their account was already processed.
+  const x = (await store.get(store.KEY.EXEC)) || null;
+  const run = x ? {
+    runId: x.runId,
+    status: x.status,
+    complete: execute.runIsComplete(x.status),
+    testMode: Boolean(x.testMode),
+    dispatched: x.done || 0,
+    planned: x.total || 0,
+    notDispatched: Math.max(0, (x.total || 0) - (x.done || 0)),
+    abortedByBreaker: Boolean(x.abortedByBreaker),
+    abortReason: (x.breaker && x.breaker.reason) || x.stoppedReason || null,
+    breakerFailures: (x.breaker && x.breaker.failures) || null,
+    counts: x.counts || null,
+  } : null;
+  download(JSON.stringify({
+    tool: 'Surtr', kind: 'kill-log', generatedAt: new Date().toISOString(),
+    run, entries: log,
+  }, null, 2), 'application/json', 'surtr-killlog-' + stamp() + '.json');
 }
 
 // Inlined rather than imported: killlog.js needs `store` injected and the panel

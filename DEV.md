@@ -619,6 +619,65 @@ on 429 with the same visible countdown as the reads. 401/403 abort the whole run
 
 The pacing is not a guess at the ceiling — it is a refusal to find it at speed.
 
+### The consecutive-failure circuit breaker
+
+The first-item guard only catches a run that is broken from the very start. A
+run where item 1 succeeds and items 2..N fail identically would dispatch every
+one of them - on a 452-item run, the difference between losing one item to a bug
+and losing four hundred.
+
+**Five consecutive failures aborts the run.** Success and already-gone reset the
+counter: the endpoint is evidently working, so whatever caused earlier failures
+was not systemic. Four failures, a success, then four more is **not** an abort,
+and there is a test for exactly that.
+
+**A single unrecoverable failure aborts immediately**, without waiting for five:
+
+- any `GRAPHQL_VALIDATION_FAILED`, at the top level or in `extensions`
+- any 4xx that is not 429 and not the already-gone case
+
+A validation error means the **request shape** is wrong. The hundredth attempt
+is rejected exactly like the first, and every one in between is a wasted write
+against a real account. The same reasoning covers other 4xx: the server is
+saying the request is unacceptable, not that it is busy.
+
+**429 is neutral** - neither counted nor reset. Counting it would abort a run
+that is merely being throttled; resetting on it would let a genuinely broken run
+launder its failure streak through rate limits. **Unverified is neutral too**,
+in the other direction: not a failure, but not evidence of success either, so it
+must not clear a streak. **5xx counts toward the streak** rather than aborting
+alone, because a server error might genuinely be transient. 401/403 stay fatal
+as before.
+
+**An aborted run is never presented as a completed one.** `runStatusFor()`
+checks the breaker first and yields `aborted`, which wins over every other
+status; `runIsComplete()` is true only for `done`. The status line reads
+`ABORTED - INCOMPLETE`, a banner carries the reason, the dispatched/planned
+split, how many were never attempted, and the raw failure bodies; and the kill
+log export carries `run.complete: false`, `abortedByBreaker`, `notDispatched`
+and the failures. "Done" is the word somebody will remember later when deciding
+whether the rest of their account was processed.
+
+### Persist what suppresses, reset what triggers
+
+The breaker state is **per run, in memory, deliberately not persisted** - the
+exact opposite of the kill-log offer flag, which had to persist. The two rules
+look contradictory and are not, and since the state-vs-transition problem now
+cuts both ways in this codebase the distinction is worth stating plainly:
+
+| | Flag | A stale value causes |
+|---|---|---|
+| Kill-log offer | **suppresses** an action | a download that should have happened does not — mildly annoying |
+| Failure counter | **triggers** an action | a healthy run is aborted for yesterday's failures — and the user cannot resume without hunting invisible state |
+
+So the offer flag persists (forgetting is worse than remembering) and the
+failure counter resets (remembering is worse than forgetting). The general form:
+**ask which direction a stale value fails in, not whether staleness is bad.**
+
+A resumed run therefore starts with a clean counter, which is correct - the
+failures that stopped the previous attempt may well have been fixed in between,
+and that is usually why somebody is resuming.
+
 ### If the first write fails, the run STOPS
 
 Not retried, not iterated on. The full request and the raw response body are
@@ -1504,3 +1563,21 @@ key name.
   bug sat at position 6 and the old rule would have dropped it.
 
 Suite: parser 68, streams 62, execute 125, build 26, filters 23.
+
+### 2026-09-06 — Consecutive-failure circuit breaker
+
+The first-item guard only caught runs broken from the start. Now:
+
+- **5 consecutive failures aborts**; success or already-gone resets the counter.
+- **A single GRAPHQL_VALIDATION_FAILED, or any non-429 4xx, aborts
+  immediately** - a wrong request shape does not fix itself by trying again.
+- **429 and unverified are neutral**: a rate limit cannot launder a failure
+  streak, and an unverified outcome cannot clear one. 5xx counts toward the
+  streak rather than aborting alone.
+- **An aborted run never reports as complete** in the counters, the banner or
+  the export.
+- The breaker is per-run and in memory, the deliberate opposite of the kill-log
+  offer flag. Written up above as "persist what suppresses, reset what
+  triggers".
+
+Suite: parser 68, streams 62, execute 172, build 26, filters 23.

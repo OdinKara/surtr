@@ -247,6 +247,7 @@ trusted to guard an irreversible action.
 | The exact item count typed in | A number you have to read and retype is a number you have looked at. |
 | The 5-item test run done **and confirmed** | Full runs stay locked until you have checked by hand that a real deletion did what you expected. |
 | Vetoes re-evaluated at dispatch | `keepIdList` and `excludePinned` are re-applied against live settings, never trusted from the scan. |
+| A circuit breaker that aborts the run | 5 consecutive failures, or a single validation error or non-429 4xx, ends the run. A wrong request shape does not fix itself by retrying, and every further dispatch would be a wasted write. |
 
 **Verb selection is the part to read closely.** A post or reply is deleted via
 `DeleteTweet` against **its own id**. A retweet is undone via `DeleteRetweet`

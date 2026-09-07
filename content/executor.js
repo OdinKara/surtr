@@ -494,6 +494,9 @@
 
     let fatal = null;
     let dispatched = 0;
+    // Per run, in memory, never persisted - see createBreaker for why this is
+    // the opposite of the kill-log offer flag.
+    const breaker = execute.createBreaker();
     try {
       for (const plan of dispatch) {
         if (abortRequested) { exec.stoppedReason = 'stopped by you'; break; }
@@ -575,6 +578,40 @@
           await discovery.markWriteConfirmedLive(plan.op);
         }
 
+        // THE CIRCUIT BREAKER. The first-item guard above only catches a run
+        // that is broken from the start; this catches one that breaks partway,
+        // which on a large set is the difference between losing one item to a
+        // bug and losing hundreds.
+        execute.recordOutcome(breaker, {
+          outcome: verdict.outcome,
+          status: res.status,
+          body: res.body,
+          detail: verdict.detail,
+          targetId: plan.targetId,
+          op: plan.op,
+        });
+        if (breaker.tripped) {
+          exec.abortedByBreaker = true;
+          exec.breaker = {
+            reason: breaker.reason,
+            immediate: breaker.immediate,
+            consecutive: breaker.consecutive,
+            limit: breaker.limit,
+            failures: breaker.failures,
+          };
+          exec.stoppedReason = breaker.reason;
+          await store.log('error',
+            (breaker.immediate
+              ? 'ABORTING IMMEDIATELY: ' + breaker.reason + '. Retrying cannot fix this, ' +
+                'and every further dispatch would be a wasted write.'
+              : 'ABORTING: ' + breaker.reason + '.') +
+            ' Raw failure bodies: ' +
+            breaker.failures.map((f) => '[' + f.op + ' ' + f.targetId + ' HTTP ' +
+              f.status + '] ' + (f.raw || f.detail || '')).join('  |  '));
+          exec.done += 1;
+          break;
+        }
+
         exec.done += 1;
         // 3. CHECKPOINT AFTER EVERY ITEM.
         exec.counts = execute.tally(killlog.forRun(await killlog.read(), activeRunId));
@@ -588,14 +625,21 @@
       const finalLog = await killlog.read();
       exec.counts = execute.tally(killlog.forRun(finalLog, activeRunId));
       exec.finishedAt = new Date().toISOString();
-      exec.status = fatal ? 'error' : abortRequested ? 'stopped' : 'done';
+      // An aborted run is never 'done'. runStatusFor checks the breaker first.
+      exec.status = execute.runStatusFor({
+        abortedByBreaker: Boolean(exec.abortedByBreaker),
+        fatal: Boolean(fatal),
+        stopped: abortRequested,
+      });
       exec.rateLimited = null;
       await store.set(store.KEY.EXEC, exec);
       executing = false;
-      await store.log(fatal ? 'error' : 'ok',
-        'EXECUTION ' + exec.status.toUpperCase() + ': ' +
-        execute.outcomeSummary(exec.counts) +
-        (exec.stoppedReason ? ' - ' + exec.stoppedReason : ''));
+      const abortLine = execute.breakerReport(breaker, exec.counts, dispatched);
+      await store.log(fatal || exec.abortedByBreaker ? 'error' : 'ok',
+        abortLine ||
+        ('EXECUTION ' + exec.status.toUpperCase() + ': ' +
+         execute.outcomeSummary(exec.counts) +
+         (exec.stoppedReason ? ' - ' + exec.stoppedReason : '')));
       if (exec.counts.unverified > 0) {
         await store.log('warn',
           exec.counts.unverified + ' item(s) are UNVERIFIED rather than deleted: no ' +

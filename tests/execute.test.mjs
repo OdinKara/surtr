@@ -404,6 +404,152 @@ ok(E.configFingerprint({ keepIdList: ['1'] }) !== E.configFingerprint({ keepIdLi
      'there is no DeleteRetweet entry to accidentally match against');
 }
 
+/* ------------------------------------------ CIRCUIT BREAKER --- */
+
+const fail = (b = { errors: [{ message: 'boom' }] }, status = 500) =>
+  ({ outcome: E.OUTCOME.FAILED, status, body: b, targetId: '1', op: 'DeleteTweet' });
+const win = () => ({ outcome: E.OUTCOME.SUCCEEDED, status: 200, body: { data: {} } });
+
+{
+  // 5 consecutive failures aborts.
+  const b = E.createBreaker();
+  for (let i = 1; i <= 4; i += 1) {
+    E.recordOutcome(b, fail());
+    ok(b.tripped === false, 'failure ' + i + ' of 5 does not trip yet');
+  }
+  E.recordOutcome(b, fail());
+  ok(b.tripped === true, 'the FIFTH consecutive failure trips the breaker');
+  ok(/5 consecutive failures/.test(b.reason), 'and says why: ' + b.reason);
+  ok(b.immediate === false, 'it is a streak abort, not an immediate one');
+  ok(b.failures.length === 5, 'the raw failure bodies are retained for the report');
+  ok(b.failures.every((f) => f.raw), 'each retained failure carries its body');
+
+  // Once tripped it stays tripped and stops accumulating.
+  const before = b.consecutive;
+  E.recordOutcome(b, win());
+  ok(b.tripped === true && b.consecutive === before,
+     'a tripped breaker is not un-tripped by a later success');
+}
+
+{
+  // 4 failures, a success, 4 more failures: NOT an abort.
+  const b = E.createBreaker();
+  for (let i = 0; i < 4; i += 1) E.recordOutcome(b, fail());
+  ok(b.consecutive === 4, 'four failures counted');
+  E.recordOutcome(b, win());
+  ok(b.consecutive === 0 && b.tripped === false, 'a SUCCESS resets the counter');
+  for (let i = 0; i < 4; i += 1) E.recordOutcome(b, fail());
+  ok(b.tripped === false,
+     '4 failures, a success, then 4 more does NOT abort - 8 failures in a run that is ' +
+     'evidently still working is not a systemic break');
+  ok(b.consecutive === 4, 'and the second streak is counted from zero');
+}
+
+{
+  // already-gone also resets: the endpoint is working.
+  const b = E.createBreaker();
+  for (let i = 0; i < 4; i += 1) E.recordOutcome(b, fail());
+  E.recordOutcome(b, { outcome: E.OUTCOME.ALREADY_GONE, status: 200, body: {} });
+  ok(b.consecutive === 0 && b.tripped === false,
+     'ALREADY-GONE resets the counter too - the request worked, the tweet was simply gone');
+}
+
+{
+  // A single validation error aborts immediately.
+  const b = E.createBreaker();
+  E.recordOutcome(b, fail({
+    errors: [{ code: 'GRAPHQL_VALIDATION_FAILED',
+               extensions: { code: 'GRAPHQL_VALIDATION_FAILED' },
+               message: 'must be defined', path: ['variable', 'source_tweet_id'] }],
+  }, 422));
+  ok(b.tripped === true, 'ONE GRAPHQL_VALIDATION_FAILED aborts immediately');
+  ok(b.immediate === true, 'and is marked as an immediate abort, not a streak');
+  ok(b.consecutive === 1, 'after a single failure, not five');
+  ok(/GRAPHQL_VALIDATION_FAILED/.test(b.reason) && /retrying cannot fix/.test(b.reason),
+     'the reason explains that retrying cannot fix a wrong request shape');
+
+  // Same when the code is only in extensions.
+  const b2 = E.createBreaker();
+  E.recordOutcome(b2, fail({ errors: [{ extensions: { code: 'GRAPHQL_VALIDATION_FAILED' } }] },
+                            422));
+  ok(b2.tripped === true, 'the code is found in extensions as well as at the top level');
+}
+
+{
+  // Any non-429 4xx aborts immediately.
+  for (const status of [400, 404, 409, 422]) {
+    const b = E.createBreaker();
+    E.recordOutcome(b, fail({ errors: [{ message: 'nope' }] }, status));
+    ok(b.tripped === true && b.immediate === true,
+       'a single HTTP ' + status + ' aborts immediately - refused, not deferred');
+  }
+
+  // 5xx does NOT abort immediately: a server error might genuinely be transient.
+  const b5 = E.createBreaker();
+  E.recordOutcome(b5, fail({ errors: [{ message: 'oops' }] }, 503));
+  ok(b5.tripped === false && b5.consecutive === 1,
+     'a 5xx counts toward the streak rather than aborting on its own');
+}
+
+{
+  // 429 does not count toward the breaker at all.
+  const b = E.createBreaker();
+  for (let i = 0; i < 20; i += 1) {
+    E.recordOutcome(b, { outcome: E.OUTCOME.FAILED, status: 429, body: null,
+                         targetId: '1', op: 'DeleteTweet' });
+  }
+  ok(b.tripped === false && b.consecutive === 0,
+     'TWENTY 429s do not trip the breaker - a rate limit is a "later", not a "no"');
+  ok(b.failures.length === 0, 'and they are not recorded as failures');
+
+  // Nor do they launder an existing streak.
+  const b2 = E.createBreaker();
+  for (let i = 0; i < 4; i += 1) E.recordOutcome(b2, fail());
+  E.recordOutcome(b2, { outcome: E.OUTCOME.FAILED, status: 429, body: null });
+  ok(b2.consecutive === 4,
+     'a 429 mid-streak neither counts nor RESETS - it cannot launder a failure streak');
+  E.recordOutcome(b2, fail());
+  ok(b2.tripped === true, 'so the next real failure still trips it');
+}
+
+{
+  // unverified is neutral in both directions.
+  const b = E.createBreaker();
+  for (let i = 0; i < 4; i += 1) E.recordOutcome(b, fail());
+  E.recordOutcome(b, { outcome: E.OUTCOME.UNVERIFIED, status: 200, body: {} });
+  ok(b.consecutive === 4,
+     'UNVERIFIED does not reset the streak - it is not evidence of success');
+  ok(b.tripped === false, 'and does not count toward it either');
+}
+
+{
+  // An aborted run never reports as complete.
+  ok(E.runStatusFor({ abortedByBreaker: true }) === 'aborted',
+     'a breaker abort produces status "aborted"');
+  ok(E.runStatusFor({ abortedByBreaker: true, fatal: true, stopped: true }) === 'aborted',
+     'and it wins over every other status - an aborted run is never anything else');
+  ok(E.runStatusFor({ fatal: true }) === 'error', 'a fatal error is still an error');
+  ok(E.runStatusFor({ stopped: true }) === 'stopped', 'a user stop is still stopped');
+  ok(E.runStatusFor({}) === 'done', 'an untroubled run is done');
+
+  ok(E.runIsComplete('done') === true, 'only "done" counts as complete');
+  for (const s of ['aborted', 'error', 'stopped', 'running', null]) {
+    ok(E.runIsComplete(s) === false, JSON.stringify(s) + ' is NOT complete');
+  }
+
+  const b = E.createBreaker();
+  for (let i = 0; i < 5; i += 1) E.recordOutcome(b, fail());
+  const report = E.breakerReport(b, { succeeded: 3, failed: 5, alreadyGone: 0, unverified: 0 }, 8);
+  ok(/RUN ABORTED BY THE CIRCUIT BREAKER/.test(report), 'the report leads with the abort');
+  ok(/8 dispatched/.test(report) && /3 succeeded/.test(report) && /5 failed/.test(report),
+     'it states how many were dispatched and how they turned out: ' + report.slice(0, 90));
+  ok(/were NOT dispatched/.test(report), 'it says the remaining items were not attempted');
+  ok(/not complete and must not be read as one/.test(report),
+     'and it refuses to be read as a completed run');
+  ok(E.breakerReport(E.createBreaker(), {}, 0) === null,
+     'an untripped breaker produces no abort report');
+}
+
 /* --------------------------------------- KILL LOG AUTO-OFFER --- */
 
 {
