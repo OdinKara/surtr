@@ -489,6 +489,53 @@ string-based and correctly rejects a mangled id; `planItem()` always produces a
 String, so this is a guard rather than a live path, but it is asserted so it
 stays one.
 
+### The echo check has THREE outcomes, not two
+
+The echoed `rest_id` is checked against the id we sent, and the result is one of
+three things - not two:
+
+| response | grade | why |
+|---|---|---|
+| echoed id **matches** | `succeeded` | verified |
+| echoed id **present and different** | `failed`, aborts the run at once | something is wrong |
+| `source_tweet_results` **empty**, no id at all | `unverified-ok` | there was nothing to check |
+
+The third grade came out of a live 119-item repost run. 118 responses echoed the
+source id. One returned:
+
+```
+HTTP 200
+{"data":{"unretweet":{"source_tweet_results":{}}}}
+```
+
+and was graded **failed** - while the unretweet had in fact worked. The Reposts
+tab emptied and X's own count agreed. The original post was simply gone, deleted
+by its author or the account suspended, so X had no source tweet to return.
+
+**An absent answer is not a negative answer.** That is the same error class as
+grading a 429 as a failure: a non-answer read as a negative one. Twice now in
+this project, which makes it worth naming as a question to ask of any check -
+*what does this do when the thing it wants to inspect is simply not there?*
+
+The distinction is kept sharp because the two cases mean opposite things. A
+**different** id means our target resolution or X's routing is wrong, and stays
+fatal. An **absent** id means there was no check to perform, and must not count
+as failure, must not abort, and must not feed the circuit breaker.
+
+### The same emptiness, two meanings - which is why shapes are per operation
+
+`DeleteTweet` returns `tweet_results: {}` and **that empty object IS the success
+shape** - the tweet is gone, so there is nothing to return, every time.
+
+`DeleteRetweet` returns `source_tweet_results` **populated** almost always, and
+legitimately empty when the original post no longer exists.
+
+Same empty object. In one operation it is the confirmation; in the other it is
+the absence of one. No single normalised rule can be right for both, and any
+attempt to "tidy" the two shapes into one would have to pick a meaning and be
+wrong about the other operation. This is the concrete reason
+`CONFIRMED_SUCCESS_SHAPES` is keyed per operation and must stay that way.
+
 ### LIMITATION: for retweets, already-gone is indistinguishable from success
 
 Re-issuing DeleteRetweet against a post that is already unretweeted returns the
@@ -506,6 +553,10 @@ returns an error that grades as `already-gone`, which is counted separately.
 This is a limitation of the endpoint, not something to paper over with a guess.
 The honest mitigation is to re-scan before a run so the matched set reflects
 what still exists - which the arm gate already requires for a different reason.
+
+**Observed live**: in the 119-item repost run, 5 items had already been
+unretweeted by earlier test runs and still returned success. The limitation is
+not theoretical.
 
 Shapes are keyed **per operation** for exactly this reason: knowledge about one
 must not leak into a claim about another.
@@ -1753,3 +1804,27 @@ unverified (the pre-encoding retweet tests), 3 failed (the DeleteRetweet 422 and
 these two 429s - the latter two would now be DEFERRED and retried).
 
 Suite: parser 69, streams 63, execute 188, build 27, filters 23.
+
+### 2026-09-06 — The echo check needs a third grade
+
+A 119-item repost run: 119 dispatched, 118 succeeded, 1 graded FAILED on a
+response that had actually worked - `source_tweet_results` was empty because the
+original post no longer exists.
+
+- **Third grade added.** Matching id -> succeeded; different id -> failed and
+  abort (unchanged); absent id -> `unverified-ok`, its own column, not a
+  failure, does not abort, does not feed the breaker.
+- **An absent answer is not a negative answer** - the same error class as
+  grading a 429 as a failure. Second instance, so it is written up as a question
+  to ask of any check: what does this do when the thing it inspects is not
+  there?
+- **The emptiness asymmetry is recorded**: for DeleteTweet an empty result IS
+  the success shape; for DeleteRetweet it is a legitimate absence. Same empty
+  object, opposite meanings, which is exactly why the shapes are keyed per
+  operation and must never be normalised.
+- **Observed live**: 5 of the 119 were already unretweeted by earlier tests and
+  still returned success - the already-gone limitation, confirmed in practice.
+
+Reposts tab is now empty.
+
+Suite: parser 69, streams 63, execute 206, build 27, filters 23.

@@ -443,6 +443,93 @@ ok(E.configFingerprint({ keepIdList: ['1'] }) !== E.configFingerprint({ keepIdLi
   ok(/ECHOED ID MISMATCH/.test(b.reason), 'and says so: ' + b.reason.slice(0, 60));
 }
 
+/* ------------------------ ABSENT IS NOT THE SAME AS DIFFERENT --- */
+
+{
+  const SRC = '669425844394270721';
+  const echo = (id) =>
+    ({ data: { unretweet: { source_tweet_results: { result: { rest_id: id } } } } });
+
+  // Observed live: 118 of 119 echoed the id, one returned an EMPTY
+  // source_tweet_results. The unretweet had worked - the Reposts tab emptied
+  // and X's own count agreed - the original post was simply gone.
+  const EMPTY = { data: { unretweet: { source_tweet_results: {} } } };
+
+  const v = E.classifyOutcome({
+    status: 200, body: EMPTY, operationName: 'DeleteRetweet', targetId: SRC });
+  ok(v.outcome === E.OUTCOME.UNVERIFIED_OK,
+     'an EMPTY source_tweet_results grades as UNVERIFIED_OK, not failed');
+  ok(v.outcome !== E.OUTCOME.FAILED,
+     'an ABSENT echo is not evidence of failure - a non-answer is not a negative answer');
+  ok(!v.mismatch, 'and it is NOT flagged as a mismatch');
+  ok(/no longer exists/.test(v.detail),
+     'the detail explains why there was nothing to echo: ' + v.detail.slice(0, 80));
+
+  // Also when source_tweet_results carries a result with no rest_id.
+  const noId = { data: { unretweet: { source_tweet_results: { result: {} } } } };
+  ok(E.classifyOutcome({ status: 200, body: noId, operationName: 'DeleteRetweet',
+                         targetId: SRC }).outcome === E.OUTCOME.UNVERIFIED_OK,
+     'a result with no rest_id is also unverifiable rather than failed');
+
+  // THE DISTINCTION. A DIFFERENT id stays fatal, exactly as before.
+  const wrong = E.classifyOutcome({
+    status: 200, body: echo('1111111111111111111'),
+    operationName: 'DeleteRetweet', targetId: SRC });
+  ok(wrong.outcome === E.OUTCOME.FAILED,
+     'a DIFFERENT echoed id is still a FAILURE - something is wrong');
+  ok(wrong.mismatch === true, 'and still flagged as a mismatch so it aborts the run');
+  ok(/669425844394270721/.test(wrong.detail) && /1111111111111111111/.test(wrong.detail),
+     'and still names both ids');
+
+  // And a matching id is still a plain success.
+  ok(E.classifyOutcome({ status: 200, body: echo(SRC), operationName: 'DeleteRetweet',
+                         targetId: SRC }).outcome === E.OUTCOME.SUCCEEDED,
+     'a matching echoed id is still SUCCEEDED');
+
+  // A missing data.unretweet is still a real failure - the shape did not match
+  // at all, which is different again from matching with nothing to check.
+  ok(E.classifyOutcome({ status: 200, body: { data: {} }, operationName: 'DeleteRetweet',
+                         targetId: SRC }).outcome === E.OUTCOME.FAILED,
+     'a missing data.unretweet is still a failure - the shape did not match');
+}
+
+{
+  // Neutral for the breaker: it neither counts toward a streak nor resets one.
+  // `fail()` is declared further down, so build the failure inline here.
+  const aFailure = { outcome: E.OUTCOME.FAILED, status: 500,
+                     body: { errors: [{ message: 'boom' }] }, targetId: '1', op: 'DeleteTweet' };
+  const b = E.createBreaker();
+  for (let i = 0; i < 4; i += 1) E.recordOutcome(b, { ...aFailure });
+  E.recordOutcome(b, {
+    outcome: E.OUTCOME.UNVERIFIED_OK, status: 200,
+    body: { data: { unretweet: { source_tweet_results: {} } } },
+    targetId: '1', op: 'DeleteRetweet' });
+  ok(b.consecutive === 4 && b.tripped === false,
+     'UNVERIFIED_OK does not count toward the failure streak');
+
+  const b2 = E.createBreaker();
+  for (let i = 0; i < 20; i += 1) {
+    E.recordOutcome(b2, { outcome: E.OUTCOME.UNVERIFIED_OK, status: 200, body: {} });
+  }
+  ok(b2.tripped === false, 'twenty of them do not abort a run');
+}
+
+{
+  const counts = E.tally([
+    { outcome: E.OUTCOME.SUCCEEDED }, { outcome: E.OUTCOME.UNVERIFIED_OK },
+    { outcome: E.OUTCOME.FAILED }, { outcome: E.OUTCOME.UNVERIFIED },
+  ]);
+  ok(counts.unverifiedOk === 1, 'unverified-ok has its own column');
+  ok(counts.failed === 1, 'and is NOT added to failed');
+  ok(counts.succeeded === 1, 'nor to deleted');
+  ok(counts.unverified === 1,
+     'and is distinct from UNVERIFIED, which means the success shape itself is unknown');
+
+  const s = E.outcomeSummary(counts);
+  ok(/1 succeeded but unverifiable/.test(s), 'the summary names it: ' + s.slice(0, 90));
+  ok(/nothing to echo back/.test(s), 'and says why');
+}
+
 /* --------------------------------------- ONE TARGET, ONE WRITE --- */
 
 {
@@ -739,7 +826,7 @@ ok(!('shouldOfferKillLog' in E) && !('recordOffered' in E),
  *
  * Raise this when adding tests. If it fails after a refactor, tests were lost.
  */
-const MIN_ASSERTIONS = 187;
+const MIN_ASSERTIONS = 205;
 ok(passes + 1 >= MIN_ASSERTIONS,
    'assertion count ' + (passes + 1) + ' is at or above the floor of ' + MIN_ASSERTIONS +
    ' - if this fails, tests were deleted rather than fixed');

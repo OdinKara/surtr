@@ -854,6 +854,19 @@ function renderExec(x) {
     df.hidden = true;
   }
 
+  // Succeeded, but with nothing to confirm it. Distinct from both "failed" and
+  // from "we do not know this operation's success shape".
+  const uok = $('exec-unverified-ok');
+  if (c.unverifiedOk) {
+    uok.className = 'banner';
+    uok.textContent =
+      c.unverifiedOk + ' item(s) succeeded but could not be verified - the original post ' +
+      'no longer exists, so X had nothing to echo back. Not a failure.';
+    uok.hidden = false;
+  } else {
+    uok.hidden = true;
+  }
+
   const u = $('exec-unverified');
   const unconfirmed = execute.unconfirmedOperations();
   if (c.unverified) {

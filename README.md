@@ -268,7 +268,10 @@ response shape confirmed against a real live response **for that operation**.
 Both write operations now have shapes confirmed against live responses, and
 `DeleteRetweet`'s is **stricter**: its response echoes back the id it acted on,
 so Surtr checks that the echoed id is the one it sent. A response confirming a
-different tweet is treated as a failure and aborts the run immediately.
+**different** tweet is treated as a failure and aborts the run immediately. A
+response with **no** id to check — which happens when the original post no
+longer exists — is reported as succeeded-but-unverifiable, not as a failure: an
+absent answer is not a negative answer.
 `DeleteTweet`'s response returns nothing to check against, so it is not given an
 invented check — verify what the response actually gives you.
 
