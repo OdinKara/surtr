@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <!-- Source of truth for every icon in this extension. The S is a PATH,
+       not a <text> element: text depends on the rasteriser having the
+       font, which is exactly the kind of difference that shows up only on
+       someone else's machine. Regenerate the PNGs with tools/build-icons.mjs. -->
+  <rect width="128" height="128" rx="26" fill="#0D0D0D"/>
+  <path fill="#E5231B" transform="translate(35.865 95.359) scale(0.041992 -0.041992)" d="M74 477 362 505Q388 360 467.5 292.0Q547 224 682 224Q825 224 897.5 284.5Q970 345 970 426Q970 478 939.5 514.5Q909 551 833 578Q781 596 596 642Q358 701 262 787Q127 908 127 1082Q127 1194 190.5 1291.5Q254 1389 373.5 1440.0Q493 1491 662 1491Q938 1491 1077.5 1370.0Q1217 1249 1224 1047L928 1034Q909 1147 846.5 1196.5Q784 1246 659 1246Q530 1246 457 1193Q410 1159 410 1102Q410 1050 454 1013Q510 966 726.0 915.0Q942 864 1045.5 809.5Q1149 755 1207.5 660.5Q1266 566 1266 427Q1266 301 1196.0 191.0Q1126 81 998.0 27.5Q870 -26 679 -26Q401 -26 252.0 102.5Q103 231 74 477Z"/>
+</svg>

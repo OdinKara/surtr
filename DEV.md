@@ -2006,3 +2006,25 @@ identically, so nothing becomes armable or unarmable either way.
   than a per-incident note.
 
 Suite: parser 69, streams 91, execute 206, build 27.
+
+### 2026-09-07 - Icon
+
+`icons/surtr.svg` is the source of truth: black rounded square, bright red S,
+centred. **The S is a PATH, not a `<text>` element** - a live `<text>` renders
+differently, or not at all, depending on which fonts the rasteriser has, which
+is the kind of difference that only shows up on someone else's machine. It was
+converted once from Arial Bold with fontTools; nothing needs fontTools to build
+the icons.
+
+`tools/build-icons.mjs` rasterises the four PNGs with headless Chromium over
+CDP - no npm, no bundler, nothing installed, consistent with the extension
+having no build step for its code. The PNGs are build output, reproducible from
+the SVG rather than opaque binaries in the tree.
+
+Per-size optical corrections live in `SIZES`, because a mark that is right at
+128px is not automatically right at 16px: the corner radius scales into mush
+and the S thins out. 16px gets a tighter radius, a hairline stroke in its own
+colour, and a 14% scale-up so it fills the tile. First attempt used a 3px
+non-scaling stroke, which at 16px is 3 DEVICE pixels and closed the counters
+completely - the S rendered as a solid red blob. Checked by eye at 12x, which
+is the only way to catch that.
