@@ -16,7 +16,7 @@
     </span>
   </div>
   <div class="top-right">
-    <span class="phase" title="No deletion code exists in this build.">DRY RUN ONLY</span>
+    <span class="phase" id="mode-badge" title="Deletion is possible in this build. Surtr opens in dry-run every time.">DRY RUN</span>
     <a id="donate" href="https://donate.grimnirworks.com/"
        target="_blank" rel="noopener noreferrer"
        title="Support GrimnirWorks" aria-label="Support GrimnirWorks">
@@ -194,6 +194,77 @@
     </table>
   </div>
   <p id="res-more" class="hint" hidden></p>
+</section>
+
+<!-- Execute -------------------------------------------------------------- -->
+<section class="card" id="exec-card" hidden>
+  <h2>Execute <span class="phase" id="exec-mode">DRY RUN</span></h2>
+
+  <p id="exec-blocked" class="banner bad" hidden></p>
+
+  <div id="exec-body" hidden>
+    <p class="banner bad">
+      DELETION IS PERMANENT. Nothing here can be undone, by this tool or by X.
+      The kill log is the only record of what is destroyed - download it.
+    </p>
+
+    <dl class="status">
+      <dt>DeleteTweet</dt><dd id="st-del-tweet" class="pending">not found</dd>
+      <dt>DeleteRetweet</dt><dd id="st-del-retweet" class="pending">not found</dd>
+    </dl>
+
+    <p id="exec-summary" class="hint"></p>
+
+    <fieldset>
+      <legend>Test run <span class="veto-tag">first</span></legend>
+      <p class="hint">
+        Acts on the 5 lowest-engagement, oldest matched items and then stops,
+        whatever the set size. Run this first and check by hand that exactly
+        those 5 are gone. Full runs stay locked until you confirm it.
+      </p>
+      <div class="tablewrap" style="max-height:150px">
+        <table><tbody id="test-preview"></tbody></table>
+      </div>
+      <div class="row">
+        <button id="btn-test" type="button">Run the 5-item test</button>
+      </div>
+      <label class="chk">
+        <input id="test-verified" type="checkbox">
+        I checked by hand: exactly those items are gone, and nothing else
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Full run <span class="veto-tag">irreversible</span></legend>
+      <label class="chk">
+        <input id="exec-live" type="checkbox"> Leave dry-run and arm this run
+      </label>
+      <label>Type the exact number of items to confirm
+        <input id="exec-confirm" type="text" inputmode="numeric" spellcheck="false"
+               placeholder="e.g. 898">
+      </label>
+      <div class="row">
+        <button id="btn-execute" type="button" class="primary" disabled>
+          Delete the matched set
+        </button>
+        <button id="btn-exec-stop" type="button" class="ghost" disabled>Stop</button>
+      </div>
+    </fieldset>
+
+    <div class="counters">
+      <div><span id="x-done">0</span><small>dispatched</small></div>
+      <div><span id="x-ok" class="good">0</span><small>deleted</small></div>
+      <div><span id="x-unver">0</span><small>unverified</small></div>
+      <div><span id="x-fail">0</span><small>failed</small></div>
+    </div>
+    <p id="exec-status" class="hint" hidden></p>
+    <p id="exec-unverified" class="banner" hidden></p>
+
+    <div class="row">
+      <button id="btn-kill-json" type="button" class="ghost">Download kill log (JSON)</button>
+      <button id="btn-kill-csv" type="button" class="ghost">Download kill log (CSV)</button>
+    </div>
+  </div>
 </section>
 
 <!-- Log ----------------------------------------------------------------- -->

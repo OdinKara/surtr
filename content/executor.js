@@ -42,24 +42,40 @@
   // file rather than the dependency that actually failed, which is a genuinely
   // misleading error to debug. See DEV.md.
   const ready = (async () => {
-    const [store, filters, streams, discovery, api, enumerate] = await Promise.all([
-      import(LIB('store.js')),
-      import(LIB('filters.js')),
-      import(LIB('streams.js')),
-      import(LIB('discovery.js')),
-      import(LIB('api.js')),
-      import(LIB('enumerate.js')),
-    ]);
+    const [store, filters, streams, execute, killlog, discovery, api, enumerate] =
+      await Promise.all([
+        import(LIB('store.js')),
+        import(LIB('filters.js')),
+        import(LIB('streams.js')),
+        import(LIB('execute.js')),
+        import(LIB('killlog.js')),
+        import(LIB('discovery.js')),
+        import(LIB('api.js')),
+        import(LIB('enumerate.js')),
+      ]);
     discovery.provide({ store });
     api.provide({ store });
     enumerate.provide({ api });
-    // streams.js and filters.js are pure - nothing to inject.
-    return { store, discovery, api, enumerate, filters, streams };
+    killlog.provide({ store });
+    // streams.js, filters.js and execute.js are pure - nothing to inject.
+    return { store, discovery, api, enumerate, filters, streams, execute, killlog };
   })();
+
+  /**
+   * Minted when this content script loads, i.e. once per page load.
+   *
+   * This is what makes "a completed scan in THIS session" enforceable. A
+   * checkpoint left in storage by a previous page load carries a different id,
+   * so it cannot be executed against - it has to be re-scanned. Phase 2 must
+   * never act on a result set whose provenance it cannot vouch for.
+   */
+  const SESSION_ID = 'sess-' + Date.now().toString(36) + '-' +
+    Math.random().toString(36).slice(2, 10);
 
   /** Set by SURTR_STOP, polled by the walk between pages and between requests. */
   let abortRequested = false;
   let running = false;
+  let executing = false;
 
   const shouldAbort = () => abortRequested;
 
@@ -93,7 +109,7 @@
   /* ---------------------------------------------------------------- scan --- */
 
   async function doScan(config) {
-    const { store, api, discovery, enumerate, filters, streams } = await ready;
+    const { store, api, discovery, enumerate, filters, streams, execute } = await ready;
 
     if (running) return { ok: false, error: 'A scan is already running.' };
     running = true;
@@ -252,6 +268,7 @@
               }
               st.rejected = state.rejected;
               st.dispensableAnomalies = state.dispensableAnomalies || 0;
+              st.reportedTotalSource = state.reportedTotalSource || null;
 
               const partition = filters.partition(all, config);
               job.enumerated = all.length;
@@ -328,6 +345,11 @@
       // DID THIS RUN ACTUALLY SEE THE ACCOUNT? A clean endReason per stream is
       // not an answer to that question, and treating it as one is how a run
       // that reached a fraction of an account reported success.
+      // Provenance for phase 2: which session produced this set, and under
+      // which filters. Both are checked before anything can be dispatched.
+      job.scanSessionId = SESSION_ID;
+      job.scanConfigFingerprint = execute.configFingerprint(config);
+
       job.completeness = streams.completeness({
         streams: job.streams,
         enumerated: all.length,
@@ -373,6 +395,210 @@
       running = false;
     }
   }
+
+
+  /* ------------------------------------------------------------- execute --- */
+
+  /**
+   * PHASE 2. The only code in this project that destroys data.
+   *
+   * Ordering inside the loop is the safety property, and it is not negotiable:
+   *
+   *     re-evaluate vetoes -> write the kill log -> FLUSH -> dispatch -> resolve
+   *
+   * The log is written and awaited BEFORE the request goes out, so a crash
+   * mid-request still leaves a record that this item was attempted. A log
+   * written after the response only records the deletions that went cleanly,
+   * which are the ones nobody needs a record of.
+   */
+  async function doExecute(request) {
+    const { store, api, discovery, filters, execute, killlog } = await ready;
+
+    if (executing) return { ok: false, error: 'An execution run is already in progress.' };
+    if (running) return { ok: false, error: 'A scan is running; wait for it to finish.' };
+
+    const job = await store.readJob();
+    const results = await store.readResults();
+    const config = request.config || (await store.get(store.KEY.CONFIG)) || {};
+
+    // Re-derive the matched set here. The panel's count is a display; this is
+    // the number the gate is checked against.
+    const { matched } = filters.partition(results, config);
+    const testMode = request.testMode === true;
+    const candidates = testMode ? execute.selectTestItems(matched) : matched;
+
+    const testVerified = (await store.get(store.KEY.TEST_VERIFIED)) === true;
+
+    const gate = execute.checkArmed({
+      armed: request.armed,
+      dryRun: request.dryRun,
+      confirmCount: request.confirmCount,
+      expectedCount: candidates.length,
+      scanStatus: job.status,
+      scanSessionId: job.scanSessionId,
+      currentSessionId: SESSION_ID,
+      configFingerprint: execute.configFingerprint(config),
+      scanConfigFingerprint: job.scanConfigFingerprint,
+      testMode,
+      testVerified,
+    });
+    if (!gate.ok) {
+      await store.log('error', 'EXECUTION REFUSED: ' + gate.refusals.join('; '));
+      return { ok: false, error: gate.refusals.join('; '), refusals: gate.refusals };
+    }
+
+    const record = await doDiscover({ force: false });
+    const missingWrites = execute.WRITE_OPERATIONS
+      ? Object.keys(execute.WRITE_OPERATIONS).filter(
+          (op) => !(record.writes && record.writes[op] && record.writes[op].queryId))
+      : [];
+    if (missingWrites.length > 0) {
+      const msg = 'EXECUTION REFUSED: no queryId discovered for ' + missingWrites.join(', ');
+      await store.log('error', msg);
+      return { ok: false, error: msg };
+    }
+
+    // Vetoes re-evaluated HERE, from the live config, never trusted from the scan.
+    const { dispatch, skipped } = execute.buildPlan({
+      items: candidates, config, evaluate: filters.evaluate,
+    });
+
+    const runId = 'run-' + Date.now().toString(36);
+    const priorLog = await killlog.read();
+    const settled = killlog.settledTargets(priorLog, request.resumeRunId || runId);
+    const activeRunId = request.resumeRunId || runId;
+
+    executing = true;
+    abortRequested = false;
+
+    const exec = {
+      runId: activeRunId,
+      testMode,
+      startedAt: new Date().toISOString(),
+      finishedAt: null,
+      status: 'running',
+      total: dispatch.length,
+      done: 0,
+      counts: null,
+      skipped: skipped.map((s) => ({ id: s.item.id, kind: s.item.kind, reason: s.reason })),
+      stoppedReason: null,
+      successShapeConfirmed: false,
+    };
+    await store.set(store.KEY.EXEC, exec);
+
+    await store.log('warn', 'EXECUTION STARTING' + (testMode ? ' (TEST RUN, 5 items)' : '') +
+      ': ' + dispatch.length + ' item(s) to act on, ' + skipped.length + ' skipped.');
+    for (const s of skipped) {
+      await store.log('info', 'skipped ' + s.item.id + ' (' + s.item.kind + '): ' + s.reason);
+    }
+
+    let fatal = null;
+    try {
+      for (const plan of dispatch) {
+        if (abortRequested) { exec.stoppedReason = 'stopped by you'; break; }
+        if (settled.has(plan.op + ':' + plan.targetId)) {
+          exec.done += 1;
+          continue;                       // already settled in the run being resumed
+        }
+
+        // 1. LOG FIRST, AND FLUSH.
+        const index = await killlog.append(killlog.entryFor({
+          item: plan.item, op: plan.op, targetId: plan.targetId,
+          runId: activeRunId, testMode,
+        }));
+
+        // 2. Only now does anything irreversible happen.
+        let res;
+        try {
+          res = await api.gqlPost({
+            queryId: record.writes[plan.op].queryId,
+            operationName: plan.op,
+            variables: { tweet_id: plan.targetId, dark_request: false },
+            bearer: record.bearer,
+            onLog: (level, message) => { store.log(level, message); },
+            shouldAbort,
+            onRateLimit: async (info) => {
+              exec.rateLimited = info ? { ...info } : null;
+              await store.set(store.KEY.EXEC, exec);
+            },
+          });
+        } catch (e) {
+          await killlog.resolve(index, {
+            outcome: execute.OUTCOME.FAILED,
+            detail: 'request threw: ' + String(e && e.message ? e.message : e),
+          });
+          if (e && e.name === 'AbortedError') { exec.stoppedReason = 'stopped by you'; break; }
+          throw e;
+        }
+
+        const verdict = execute.classifyOutcome({ status: res.status, body: res.body });
+
+        // Keep the raw body for the first few responses: the success shape for
+        // these operations is not confirmed yet, and it will be determined from
+        // evidence rather than assumed.
+        const keepRaw = exec.done < 3;
+        await killlog.resolve(index, {
+          outcome: verdict.outcome,
+          detail: verdict.detail,
+          status: res.status,
+          raw: keepRaw ? res.raw : undefined,
+        });
+
+        if (verdict.outcome === execute.OUTCOME.FAILED && exec.done === 0) {
+          // FIRST CALL FAILED. Log everything and stop - do not iterate blind
+          // against a write endpoint.
+          await store.log('error',
+            'FIRST WRITE FAILED - STOPPING. Request: ' + JSON.stringify(res.request) +
+            '  Response status ' + res.status + ': ' + String(res.raw).slice(0, 1500));
+          exec.stoppedReason = 'first write failed; stopped rather than iterating blind';
+          fatal = new Error(exec.stoppedReason);
+          break;
+        }
+        if (verdict.fatal) {
+          await store.log('error', 'ABORTING RUN: ' + verdict.detail);
+          exec.stoppedReason = verdict.detail;
+          fatal = new Error(verdict.detail);
+          break;
+        }
+
+        if (verdict.outcome !== execute.OUTCOME.FAILED) {
+          await discovery.markWriteConfirmedLive(plan.op);
+        }
+
+        exec.done += 1;
+        // 3. CHECKPOINT AFTER EVERY ITEM.
+        exec.counts = execute.tally(killlog.forRun(await killlog.read(), activeRunId));
+        await store.set(store.KEY.EXEC, exec);
+
+        // Conservative pacing. The write limits are UNKNOWN; this is not a
+        // guess at the ceiling, it is a refusal to find it at speed.
+        if (!abortRequested) await sleep(WRITE_DELAY_MS);
+      }
+    } finally {
+      const finalLog = await killlog.read();
+      exec.counts = execute.tally(killlog.forRun(finalLog, activeRunId));
+      exec.finishedAt = new Date().toISOString();
+      exec.status = fatal ? 'error' : abortRequested ? 'stopped' : 'done';
+      exec.rateLimited = null;
+      await store.set(store.KEY.EXEC, exec);
+      executing = false;
+      await store.log(fatal ? 'error' : 'ok',
+        'EXECUTION ' + exec.status.toUpperCase() + ': ' +
+        execute.outcomeSummary(exec.counts) +
+        (exec.stoppedReason ? ' - ' + exec.stoppedReason : ''));
+      if (exec.counts.unverified > 0) {
+        await store.log('warn',
+          'The success shape for these operations is NOT yet confirmed, so ' +
+          exec.counts.unverified + ' item(s) are reported as UNVERIFIED rather than ' +
+          'deleted. Check by hand, then confirm the shape from the kill log.');
+      }
+    }
+
+    return { ok: !fatal, counts: exec.counts, runId: activeRunId };
+  }
+
+  const WRITE_DELAY_MS = 1500;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   /* ------------------------------------------------------------ messages --- */
 
@@ -420,6 +646,24 @@
             await store.patch(store.KEY.JOB, { status: store.JOB_STOPPING });
             await logLine(store, 'warn', 'stop requested');
             sendResponse({ ok: true });
+            return;
+          }
+          case 'SURTR_EXECUTE': {
+            const res = await doExecute(msg || {});
+            sendResponse(res);
+            return;
+          }
+          case 'SURTR_SESSION': {
+            // The panel asks which session the executor is in, so it can tell
+            // whether the stored scan belongs to this page load.
+            const { store } = await ready;
+            const job = await store.readJob();
+            sendResponse({
+              ok: true,
+              sessionId: SESSION_ID,
+              scanSessionId: job.scanSessionId || null,
+              scanConfigFingerprint: job.scanConfigFingerprint || null,
+            });
             return;
           }
           case 'SURTR_RESET': {

@@ -12,6 +12,15 @@ Handoff file. Read this first; it should be enough to resume without asking.
 
 ## CURRENT STATE (resume here)
 
+**PHASE 1 IS VALIDATED.** Live three-stream run on build `9c00d06286a0`:
+2,600 of the 2,616 items X reports (99%), `complete: true`, shortfall 16;
+0 cross-stream duplicates; 0 foreign permalinks across 898 matched; 2 rate
+limits on the replies stream, both recovered, all items retrieved.
+
+**PHASE 2 IS BUILT AND HAS NEVER BEEN RUN.** Deletion is possible in this
+build. The next step is the 5-item test run; full runs are locked until it has
+been done and confirmed by hand. See "Phase 2" below before touching it.
+
 **Phase 1 scaffold complete and committed.** Repo is **private** on GitHub as
 `OdinKara/surtr`, and stays private until the scanner is validated.
 
@@ -363,6 +372,130 @@ evidence of a clean sweep. It now returns `complete: false` with
 `unknownTotal: true`, and the panel says **LOWER BOUND … completeness cannot be
 assessed**. A test asserting the old behaviour was corrected — it had encoded
 the bug.
+
+### Phase 2: the executor
+
+The first code here that destroys data. Everything in it is shaped by one
+asymmetry: every other module can be wrong and produce a bad report; this one
+can be wrong and delete somebody's posts, possibly somebody else's.
+
+**`lib/execute.js` is pure** — planning, verb selection, the arm gate, outcome
+grading — so the irreversible decisions are testable without a browser and
+without an account. `tests/execute.test.mjs`, 68 assertions.
+
+**Verb selection is the dangerous part.**
+
+```
+post, reply -> DeleteTweet   on the item's OWN id
+retweet     -> DeleteRetweet on sourceTweetId, the ORIGINAL post
+```
+
+Those are different ids, and for a retweet `sourceTweetId` belongs to somebody
+else. Swapping them does not throw — it sends a well-formed request naming the
+wrong tweet. So a retweet with no `sourceTweetId` is **skipped and reported**,
+never falls back to the item's own id, and there is a test for each direction.
+
+**The gate is enforced in the executor, not the panel.** The panel's controls
+are a convenience; a UI cannot guard an irreversible action, because it is the
+first thing a bug or an attacker reaches. `checkArmed()` re-derives the matched
+set and re-checks every condition: dry-run explicitly off, armed explicitly
+true, a completed scan **from this page session** (the content script mints a
+session id on load, so a checkpoint from a previous load cannot be executed
+against), filters unchanged since the scan, the exact count typed in, and — for
+full runs — the 5-item test attested. Every failing condition is reported, not
+just the first.
+
+**Vetoes are re-evaluated at dispatch**, from the live config. A `keepIdList`
+entry added after the scan is honoured; an item that no longer matches the
+current filters is skipped as `no-longer-matched` rather than acted on because
+it matched an hour ago.
+
+### The kill log is written BEFORE the request
+
+Append, **flush**, then dispatch. Never the other way round, never batched.
+
+A log written after a successful response records only the deletions that went
+cleanly, which are precisely the ones nobody needs a record of. The entries
+worth having are the request that crashed the tab or never returned: those leave
+an entry marked `attempted` and nothing else, and that entry is the only trace
+that anything happened to that post.
+
+Each entry holds id, kind, sourceTweetId, createdAt, **full text**, permalink,
+counts, timestamps and the outcome once known. The text is there because once
+the request succeeds this is the last place it exists.
+
+### Outcomes: `200` is not proof of deletion
+
+Counted separately: **succeeded, already-gone, failed, skipped, unverified,
+attempted**. None of them absorbs another, and `outcomeSummary()` refuses to
+state a "deleted" total that includes anything unconfirmed.
+
+**The success shape for these operations is NOT yet known**, because that
+requires a live response and none has been made. Until it is confirmed,
+`classifyOutcome()` returns `unverified` for a clean 2xx rather than
+`succeeded` — an honest "the request came back 200 and we do not yet know that
+means deleted". The first three raw response bodies of a run are kept in the
+kill log so the shape can be determined from evidence and then encoded via
+`confirmedSuccessShape`.
+
+What can already be classified without a live call: auth failures, 429s, and a
+GraphQL `errors` array — including the "no status found" case, which is
+`already-gone`: benign, but not something we did, so not a success.
+
+### The 5-item test run
+
+Acts on the 5 **lowest-engagement, oldest** matched items and stops, whatever
+the set size. Engagement is ranked ahead of age deliberately: the point is to
+make the first irreversible action the least consequential one available, and a
+forgotten post with no interactions is a cheaper mistake than an old post people
+replied to. Age is the tie-break. An item with an unparseable date sorts **last**
+— an unknown date is not evidence of age.
+
+The exact 5 are shown in the panel before arming, so they can be checked against
+what the run then reports.
+
+Full runs are locked behind an **attestation**, not a check the tool can make:
+Surtr cannot verify from here that a post is gone, so the user confirms by hand
+and ticks the box. It is labelled as an attestation rather than a verification.
+
+### Rate limits on writes are UNKNOWN
+
+The reads observed 50 per operation per fixed ~15-minute window. **None of that
+is assumed to carry over.** Writes get their own buckets automatically (rate
+tracking is keyed by operation name), start at concurrency 1 with a conservative
+1.5s delay between items, read `x-rate-limit-*` off every response, and back off
+on 429 with the same visible countdown as the reads. 401/403 abort the whole run.
+
+The pacing is not a guess at the ceiling — it is a refusal to find it at speed.
+
+### If the first write fails, the run STOPS
+
+Not retried, not iterated on. The full request and the raw response body are
+logged and the run ends, because iterating blind against a write endpoint is how
+a bad request gets sent a hundred times instead of once.
+
+### Checkpoint after every item
+
+Not every batch. `exec.done` and the kill log are written per item, so a stopped
+or crashed run resumes without re-attempting settled items. An entry still
+marked `attempted` is deliberately **retried**: we do not know whether that
+request landed, and re-deleting an already-deleted post classifies as
+`already-gone`, whereas skipping it could leave an item undeleted while the run
+reports itself complete.
+
+### expectedOverlapDeduped: the prediction was wrong
+
+We predicted posts and replies would overlap, because `UserOriginalsTimeline`
+returns entries carrying `in_reply_to_status_id_str`. Across all 2,600 items in
+a full live run, **no id appeared in two streams** — the three operations are
+fully disjoint. Carrying a reply's metadata is not the same as serving it in the
+replies stream.
+
+Harmless, and the counter stays exactly as it is. It was built as a defect
+detector, and a detector that has never fired against real data is doing its
+job; the `EXPECTED_OVERLAP` allowance for posts/replies stays too, since the
+cost of keeping it is nil and X's behaviour here is evidently not something to
+predict from field names.
 
 ### Which build is loaded: the panel says so
 
@@ -1139,3 +1272,27 @@ Two defects from a three-stream live run, plus a third found while fixing them.
   control-byte test.
 
 Suite: parser 68, streams 62, build 24, filters 23.
+
+### 2026-09-06 — Phase 2 built, never run
+
+Phase 1 validated live: 2,600 of 2,616 (99%), complete, zero foreign ids, two
+rate limits recovered.
+
+- **`expectedOverlapDeduped` came back 0.** The prediction that posts and
+  replies would overlap was wrong, harmlessly. Recorded above; the counter
+  stays as a defect detector.
+- **`reportedTotalSource` fixed.** The value landed and the provenance field was
+  never emitted in the export - a verified number is unverifiable again the
+  moment nobody can say where it came from.
+- **Phase 2 built**: discovery of the write operations, a separate POST path,
+  verb selection, the arm gate, the kill log, per-item checkpointing, outcome
+  grading that refuses to call an unconfirmed 200 a success, and the 5-item test
+  run. 68 assertions in `tests/execute.test.mjs`.
+- **The README no longer says this build cannot delete**, because it can. The
+  panel's header badge used to promise "no deletion code exists in this build"
+  and now reports live state - a stale reassurance is worse than none.
+
+NOT RUN against any account. The 5-item test is the next step and full runs are
+locked until it is done and confirmed.
+
+Suite: parser 68, streams 62, execute 68, build 26, filters 23.

@@ -5,13 +5,23 @@
 By [GrimnirWorks](https://grimnirworks.com) · GrimnirWorks · niamain@gmail.com
 Licensed [AGPL-3.0](LICENSE).
 
-> **Phase 1: this build cannot delete anything.**
-> There is no `DeleteTweet` call, no `DeleteRetweet` call, no execution code —
-> not disabled, not commented out, not behind a flag. Surtr today enumerates
-> your posts, filters them, and shows you exactly what a future execution phase
-> *would* act on. Deletion lands only after the scanner has been validated
-> against real accounts. You can verify this claim yourself in about ten
-> seconds — see [Audit it in five minutes](#audit-it-in-five-minutes).
+> **This build CAN delete. Read this section before running it.**
+>
+> Phase 1 (scan) is validated: a live run enumerated 2,600 of the 2,616 items X
+> reports for an account, with zero foreign ids and zero cross-stream
+> duplicates. Phase 2 (execute) now exists, and deletion is **permanent** —
+> neither this tool nor X can undo it.
+>
+> Surtr still **opens in dry-run every time**, and dry-run is never persisted.
+> Deleting requires: a completed scan from the current page session, filters
+> unchanged since that scan, an explicit arm toggle, typing the exact item
+> count, and — for a full run — having first completed and confirmed a 5-item
+> test run. Every one of those is re-checked inside the extension, not just in
+> the panel.
+>
+> The **kill log** records every item *before* its delete request is sent, so a
+> crash still leaves a record of what was attempted. It is the only record of
+> what was destroyed. Download it.
 
 ---
 
@@ -106,22 +116,28 @@ sync — you can move this folder wherever you like.
 ### Audit it in five minutes
 
 ```sh
-# 1. No deletion request can be built. Both must print nothing.
-grep -rn "operationName:.*Delete"       --include=*.js .
-grep -rni "method:.*['\"]\(post\|put\|delete\|patch\)" --include=*.js .
+# 1. Every request that can WRITE. There is exactly one POST call site,
+#    lib/api.js gqlPost, and it is used only by the execute path.
+grep -rn "method: 'POST'" --include=*.js .
 
-# The two words themselves DO appear once each - in a comment in
-# lib/enumerate.js explaining what phase 2 will do. Read it and confirm that is
-# all it is:
-grep -rn "DeleteTweet\|DeleteRetweet" --include=*.js .
+# 2. Every operation name that can be constructed. Two of them delete.
+grep -rhoE "'(Delete[A-Za-z]+|User[A-Za-z]+)'" --include=*.js lib/ content/ | sort -u
 
-# 2. Every network call. There are exactly two call sites.
+# 3. What decides WHICH id gets deleted - the most dangerous logic here.
+#    Read planItem(): posts and replies target their own id, retweets target
+#    the ORIGINAL post via sourceTweetId, and anything else is skipped.
+grep -n "planItem" -A 40 lib/execute.js
+
+# 4. What can open the gate. Every condition is re-checked in the executor.
+grep -n "checkArmed" -A 45 lib/execute.js
+
+# 5. Every network call. Three call sites: two reads and one write.
 grep -rn "fetch(" --include=*.js .
 
-# 3. Every host that can be reached: x.com, and abs.twimg.com for the bundle.
+# 6. Every host that can be reached: x.com, and abs.twimg.com for the bundle.
 grep -rn "https://\|twimg" --include=*.js .
 
-# 4. Nothing reads or stores your session token.
+# 7. Nothing reads or stores your session token.
 grep -rni "auth_token" --include=*.js .     # comments only
 ```
 
@@ -217,6 +233,34 @@ and that is shown as a banner and recorded in the export — a scan that quietly
 did less work than you assumed is the same problem as an export that reads as
 complete and is not.
 
+### Deleting: what has to be true before anything is destroyed
+
+Every one of these is enforced **inside the extension**, re-derived from its own
+state. The panel's controls are a convenience, not the gate — a UI cannot be
+trusted to guard an irreversible action.
+
+| Condition | Why |
+|---|---|
+| A scan completed **in this page session** | A checkpoint left over from a previous load has provenance nobody can vouch for. Re-scan instead. |
+| Filters **unchanged** since that scan | A matched set is only meaningful under the filters that produced it. |
+| Dry-run explicitly turned off | The default, re-asserted on every load, never persisted. |
+| The exact item count typed in | A number you have to read and retype is a number you have looked at. |
+| The 5-item test run done **and confirmed** | Full runs stay locked until you have checked by hand that a real deletion did what you expected. |
+| Vetoes re-evaluated at dispatch | `keepIdList` and `excludePinned` are re-applied against live settings, never trusted from the scan. |
+
+**Verb selection is the part to read closely.** A post or reply is deleted via
+`DeleteTweet` against **its own id**. A retweet is undone via `DeleteRetweet`
+against the **original post's id** — which belongs to somebody else. Those are
+different ids and mixing them up would send a well-formed request naming the
+wrong tweet, so a retweet whose original id was never captured is **skipped and
+reported**, never falls back to anything.
+
+**Outcomes are counted separately** — deleted, already gone, failed, skipped,
+and *unverified*. A `200` is not proof of deletion, and until the success shape
+for these operations has been confirmed against a real response, a clean
+response is reported as **unverified rather than deleted**. The run will not
+inflate a success count to look tidy.
+
 ### Scope
 
 Posts, replies and retweets. **Likes are not enumerated and not touched.**
@@ -262,12 +306,11 @@ gitignored, because they contain your post text, ids and permalinks.
 | **`excludePinned`** | **Veto.** On by default. |
 | **`keepIdList`** | **Veto.** Ids that must never be touched. For a retweet, keeping the original's id also keeps your retweet of it. |
 
-## Phase 2 (not in this build)
+## Phase 2
 
-Execution — `DeleteTweet` for your own posts, `DeleteRetweet` against the
-*original* post for retweets — is added only once the scanner is trusted. The
-normalizer already records `sourceTweetId` for every retweet so that phase does
-not require a second full scan.
+Phase 2 has landed — see **Deleting** above. It has not yet been run against a
+live account: the 5-item test run is the next step, and full runs are locked
+until it has been done and confirmed by hand.
 
 ## Contributing
 

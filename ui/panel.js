@@ -14,6 +14,7 @@
 import * as store from '../lib/store.js';
 import * as filters from '../lib/filters.js';
 import { computeBuildId } from '../lib/build.js';
+import * as execute from '../lib/execute.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -467,6 +468,8 @@ async function paint() {
   renderRate(job);
   renderLog(log);
   lastMatched = renderResults(results, readConfig());
+  renderExec(await store.get(store.KEY.EXEC));
+  await refreshExecute();
 }
 
 chrome.storage.onChanged.addListener((changes, area) => {
@@ -582,6 +585,10 @@ function streamsBlock(job) {
     complete: Boolean(j.completeness && j.completeness.complete),
     incompleteReason: (j.completeness && j.completeness.reason) || null,
     accountTotalReportedByX: (j.completeness && j.completeness.reportedTotal) ?? null,
+    // WHERE the total came from. The value landed correctly and the provenance
+    // did not, which is the kind of gap that turns a verified number back into
+    // an unverifiable one the moment anybody asks how it was obtained.
+    accountTotalSource: j.reportedTotalSource || null,
     enumerated: (j.completeness && j.completeness.enumerated) ?? (j.enumerated || 0),
     shortfall: (j.completeness && j.completeness.shortfall) ?? null,
     percentOfAccount: (j.completeness && j.completeness.percent) ?? null,
@@ -596,6 +603,7 @@ function streamsBlock(job) {
       enumerated: s.enumerated || 0,
       error: s.error || null,
       reportedTotal: s.reportedTotal ?? null,
+      reportedTotalSource: s.reportedTotalSource || null,
       note: s.termination || null,
       // Kept per operation, never merged: different endpoints, different budgets.
       rateObserved: s.rate
@@ -644,6 +652,241 @@ for (const id of [
 ]) {
   $(id).addEventListener('change', paint);
   $(id).addEventListener('input', paint);
+}
+
+/* ----------------------------------------------------------------- execute --- */
+
+/**
+ * PHASE 2 CONTROLS.
+ *
+ * These render at all only when there is a completed scan FROM THIS SESSION
+ * whose filters still match the ones on screen. Everything below is a
+ * convenience for the user; the actual gate lives in the executor, which
+ * re-derives the matched set and re-checks every condition itself. A panel
+ * cannot be trusted to guard a delete - it is the thing an attacker or a bug
+ * would reach first.
+ *
+ * Dry-run is the default and is re-asserted on every load. It is deliberately
+ * NOT persisted: an armed state surviving a reload is how someone comes back to
+ * a page an hour later and clicks the wrong button.
+ */
+let execSession = null;
+let execPlanCount = 0;
+
+async function refreshExecute() {
+  const job = await store.readJob();
+  const results = await store.readResults();
+  const config = readConfig();
+  const card = $('exec-card');
+  const blocked = $('exec-blocked');
+  const body = $('exec-body');
+
+  const reasons = [];
+  if (job.status !== store.JOB_DONE && job.status !== store.JOB_PARTIAL) {
+    reasons.push('no completed scan in this session');
+  }
+  if (!execSession || !job.scanSessionId || job.scanSessionId !== execSession.sessionId) {
+    reasons.push('the scan was not completed in this page session - re-scan first');
+  }
+  if (job.scanConfigFingerprint &&
+      job.scanConfigFingerprint !== execute.configFingerprint(config)) {
+    reasons.push('filters have changed since the scan - the matched set is stale, re-scan');
+  }
+
+  // No completed scan at all: the controls do not exist, rather than existing
+  // and refusing.
+  if (job.status !== store.JOB_DONE && job.status !== store.JOB_PARTIAL) {
+    card.hidden = true;
+    return;
+  }
+  card.hidden = false;
+
+  if (reasons.length) {
+    blocked.textContent = 'EXECUTION UNAVAILABLE: ' + reasons.join('; ') + '.';
+    blocked.hidden = false;
+    body.hidden = true;
+    return;
+  }
+  blocked.hidden = true;
+  body.hidden = false;
+
+  const { matched } = filters.partition(results, config);
+  execPlanCount = matched.length;
+  const sum = execute.summarise(matched);
+  $('exec-summary').textContent =
+    sum.total + ' matched \u2014 ' + sum.byKind.post + ' posts, ' + sum.byKind.reply +
+    ' replies, ' + sum.byKind.retweet + ' retweets' +
+    (sum.oldest ? '. Oldest ' + sum.oldest.slice(0, 10) +
+      ', newest ' + sum.newest.slice(0, 10) : '') +
+    '. Deleting these cannot be undone.';
+
+  // The 5 the test run would act on, shown BEFORE arming so they can be checked.
+  const preview = execute.selectTestItems(matched);
+  const tb = $('test-preview');
+  tb.textContent = '';
+  for (const p of preview) {
+    const tr = document.createElement('tr');
+    const d = document.createElement('td');
+    d.className = 'num';
+    d.textContent = (p.createdAt || '').slice(0, 10);
+    const k = document.createElement('td');
+    k.className = 'kind';
+    k.textContent = p.kind;
+    const e = document.createElement('td');
+    e.className = 'num';
+    e.textContent = execute.engagementOf(p);
+    const t = document.createElement('td');
+    t.className = 'txt';
+    t.textContent = preview_text(p.text);
+    tr.append(d, k, e, t);
+    tb.append(tr);
+  }
+  $('btn-test').disabled = preview.length === 0;
+
+  const disc = await store.get(store.KEY.DISCOVERY);
+  const w = (disc && disc.writes) || {};
+  for (const [op, id] of [['DeleteTweet', 'st-del-tweet'], ['DeleteRetweet', 'st-del-retweet']]) {
+    const found = w[op] && w[op].queryId;
+    setStatus($(id), Boolean(found),
+      found ? (w[op].confirmedLive ? found + '  [confirmed live]' : found + '  [in bundle]')
+            : 'NOT FOUND - run Discover');
+  }
+
+  const verified = (await store.get(store.KEY.TEST_VERIFIED)) === true;
+  $('test-verified').checked = verified;
+
+  const armed = $('exec-live').checked;
+  const typed = $('exec-confirm').value.trim();
+  $('exec-mode').textContent = armed ? 'ARMED' : 'DRY RUN';
+  // The header badge used to promise "no deletion code exists in this build".
+  // That was true, and stopped being true, and a stale reassurance is worse
+  // than none - so it now reports the live state instead of a claim.
+  const badge = $('mode-badge');
+  badge.textContent = armed ? 'ARMED - CAN DELETE' : 'DRY RUN';
+  badge.style.color = armed ? 'var(--bad)' : '';
+  badge.style.borderColor = armed ? 'var(--bad)' : '';
+  $('btn-execute').disabled =
+    !armed || !verified || execPlanCount === 0 || String(execPlanCount) !== typed;
+}
+
+function preview_text(text) {
+  const t = String(text || '').replace(/\s+/g, ' ').trim();
+  return t.length > 60 ? t.slice(0, 60) + '\u2026' : t;
+}
+
+function renderExec(x) {
+  if (!x) return;
+  const c = x.counts || {};
+  $('x-done').textContent = x.done || 0;
+  $('x-ok').textContent = c.succeeded || 0;
+  $('x-unver').textContent = c.unverified || 0;
+  $('x-fail').textContent = c.failed || 0;
+
+  const st = $('exec-status');
+  st.textContent = 'run ' + x.runId + (x.testMode ? ' (TEST)' : '') + ' \u2014 ' +
+    x.status + ', ' + (x.done || 0) + ' of ' + x.total +
+    (x.rateLimited ? ' \u2014 RATE LIMITED, resuming in ' +
+      countdown(x.rateLimited.resetAtMs) : '') +
+    (x.stoppedReason ? ' \u2014 ' + x.stoppedReason : '');
+  st.hidden = false;
+
+  const u = $('exec-unverified');
+  if (c.unverified) {
+    u.className = 'banner';
+    u.textContent =
+      c.unverified + ' request(s) returned 200 with no errors, but the success shape for ' +
+      'these operations has NOT been confirmed against a live response. They are counted ' +
+      'as UNVERIFIED, not deleted. Check by hand and read the raw responses in the kill log.';
+    u.hidden = false;
+  } else {
+    u.hidden = true;
+  }
+
+  // The kill log is the only record. Offer it without being asked.
+  if (x.status && x.status !== 'running' && !renderExec._offered) {
+    renderExec._offered = true;
+    downloadKillLog('json');
+  }
+}
+
+async function downloadKillLog(kind) {
+  const log = await store.get('surtr:killlog');
+  if (!log || log.length === 0) return;
+  if (kind === 'csv') {
+    download(killlog_toCsv(log), 'text/csv', 'surtr-killlog-' + stamp() + '.csv');
+  } else {
+    download(JSON.stringify({ tool: 'Surtr', kind: 'kill-log', generatedAt:
+      new Date().toISOString(), entries: log }, null, 2),
+      'application/json', 'surtr-killlog-' + stamp() + '.json');
+  }
+}
+
+// Inlined rather than imported: killlog.js needs `store` injected and the panel
+// only ever formats, never writes.
+function killlog_toCsv(log) {
+  const cols = ['attemptedAt', 'runId', 'testMode', 'op', 'targetId', 'id', 'kind',
+    'sourceTweetId', 'createdAt', 'outcome', 'outcomeDetail', 'responseStatus',
+    'resolvedAt', 'likeCount', 'retweetCount', 'replyCount', 'stream', 'permalink', 'text'];
+  const esc = (v) => {
+    const s = v === null || v === undefined ? '' : String(v);
+    return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const out = [cols.join(',')];
+  for (const e of log || []) out.push(cols.map((c) => esc(e[c])).join(','));
+  return out.join('\r\n');
+}
+
+async function dispatchExecute(testMode) {
+  const config = readConfig();
+  const payload = {
+    type: 'SURTR_EXECUTE',
+    testMode,
+    armed: testMode ? true : $('exec-live').checked === true,
+    dryRun: false,
+    confirmCount: testMode ? undefined : Number($('exec-confirm').value.trim()),
+    config,
+  };
+  if (testMode) {
+    const results = await store.readResults();
+    const { matched } = filters.partition(results, config);
+    payload.confirmCount = execute.selectTestItems(matched).length;
+  }
+  renderExec._offered = false;
+  const r = await send(payload);
+  if (!r.ok) {
+    $('exec-blocked').textContent = 'EXECUTION REFUSED: ' + (r.error || 'unknown');
+    $('exec-blocked').hidden = false;
+  }
+  await paint();
+}
+
+$('btn-test').addEventListener('click', async () => {
+  const n = Number($('test-preview').childElementCount);
+  if (!window.confirm(
+    'Permanently delete ' + n + ' item(s)?\n\nThis is the 5-item test run. It cannot be ' +
+    'undone. The kill log records what is attempted before each request.')) return;
+  await dispatchExecute(true);
+});
+
+$('btn-execute').addEventListener('click', async () => {
+  if (!window.confirm(
+    'Permanently delete ' + execPlanCount + ' item(s)?\n\nThis CANNOT be undone, by this ' +
+    'tool or by X. Download the kill log afterwards - it is the only record.')) return;
+  await dispatchExecute(false);
+});
+
+$('btn-exec-stop').addEventListener('click', async () => { await send({ type: 'SURTR_STOP' }); });
+$('btn-kill-json').addEventListener('click', () => downloadKillLog('json'));
+$('btn-kill-csv').addEventListener('click', () => downloadKillLog('csv'));
+
+$('test-verified').addEventListener('change', async () => {
+  await store.set(store.KEY.TEST_VERIFIED, $('test-verified').checked === true);
+  await refreshExecute();
+});
+
+for (const id of ['exec-live', 'exec-confirm']) {
+  $(id).addEventListener('input', refreshExecute);
+  $(id).addEventListener('change', refreshExecute);
 }
 
 /* --------------------------------------------------------------- countdown --- */
@@ -740,6 +983,13 @@ $('donate').addEventListener('click', (ev) => {
 /* ------------------------------------------------------------------- boot --- */
 
 (async () => {
+  // DRY RUN IS RE-ASSERTED ON EVERY LOAD and is never persisted. An armed state
+  // that survived a reload is how somebody returns to this page later and
+  // clicks a button meaning something other than what they left it meaning.
+  $('exec-live').checked = false;
+  $('exec-confirm').value = '';
+
+  execSession = await send({ type: 'SURTR_SESSION' });
   await paint();
   const ping = await send({ type: 'SURTR_PING' });
   setStatus($('st-tab'), Boolean(ping.ok), ping.ok ? 'connected' : (ping.error || 'not found'));
