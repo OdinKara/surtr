@@ -745,11 +745,18 @@ async function refreshExecute() {
 
   const disc = await store.get(store.KEY.DISCOVERY);
   const w = (disc && disc.writes) || {};
+  const unconfirmedOps = execute.unconfirmedOperations();
   for (const [op, id] of [['DeleteTweet', 'st-del-tweet'], ['DeleteRetweet', 'st-del-retweet']]) {
     const found = w[op] && w[op].queryId;
+    // Two independent facts, and conflating them would be the same mistake as
+    // "in bundle" vs "confirmed live": whether the queryId was FOUND, and
+    // whether we know what a successful RESPONSE from it looks like.
+    const shapeNote = unconfirmedOps.includes(op)
+      ? '  \u2014 success shape UNCONFIRMED, outcomes will read as unverified'
+      : '  \u2014 success shape confirmed';
     setStatus($(id), Boolean(found),
-      found ? (w[op].confirmedLive ? found + '  [confirmed live]' : found + '  [in bundle]')
-            : 'NOT FOUND - run Discover');
+      (found ? (w[op].confirmedLive ? found + '  [confirmed live]' : found + '  [in bundle]')
+             : 'NOT FOUND - run Discover') + shapeNote);
   }
 
   const verified = (await store.get(store.KEY.TEST_VERIFIED)) === true;
@@ -791,12 +798,15 @@ function renderExec(x) {
   st.hidden = false;
 
   const u = $('exec-unverified');
+  const unconfirmed = execute.unconfirmedOperations();
   if (c.unverified) {
     u.className = 'banner';
     u.textContent =
       c.unverified + ' request(s) returned 200 with no errors, but the success shape for ' +
-      'these operations has NOT been confirmed against a live response. They are counted ' +
-      'as UNVERIFIED, not deleted. Check by hand and read the raw responses in the kill log.';
+      (unconfirmed.length ? unconfirmed.join(' and ') : 'this operation') +
+      ' has NOT been confirmed against a live response. They are counted as UNVERIFIED, ' +
+      'not deleted. Check by hand and send the raw response from the kill log so the ' +
+      'shape can be encoded.';
     u.hidden = false;
   } else {
     u.hidden = true;

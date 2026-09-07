@@ -256,10 +256,15 @@ wrong tweet, so a retweet whose original id was never captured is **skipped and
 reported**, never falls back to anything.
 
 **Outcomes are counted separately** — deleted, already gone, failed, skipped,
-and *unverified*. A `200` is not proof of deletion, and until the success shape
-for these operations has been confirmed against a real response, a clean
-response is reported as **unverified rather than deleted**. The run will not
-inflate a success count to look tidy.
+and *unverified*. A `200` is not proof of deletion, so success requires a
+response shape confirmed against a real live response **for that operation**.
+
+`DeleteTweet` is confirmed, from a 5-item test run verified by hand afterwards.
+`DeleteRetweet` is **not** — no retweet has been deleted yet, so no response has
+been seen, and it is not assumed to mirror `DeleteTweet`. Until it is captured,
+undoing a retweet reports as *unverified* rather than deleted, and the panel
+says which operation is unconfirmed. The run will not inflate a success count to
+look tidy.
 
 ### Scope
 

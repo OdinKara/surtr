@@ -427,20 +427,38 @@ the request succeeds this is the last place it exists.
 ### Outcomes: `200` is not proof of deletion
 
 Counted separately: **succeeded, already-gone, failed, skipped, unverified,
-attempted**. None of them absorbs another, and `outcomeSummary()` refuses to
-state a "deleted" total that includes anything unconfirmed.
+attempted**. None absorbs another, and `outcomeSummary()` refuses to state a
+"deleted" total that includes anything unconfirmed.
 
-**The success shape for these operations is NOT yet known**, because that
-requires a live response and none has been made. Until it is confirmed,
-`classifyOutcome()` returns `unverified` for a clean 2xx rather than
-`succeeded` — an honest "the request came back 200 and we do not yet know that
-means deleted". The first three raw response bodies of a run are kept in the
-kill log so the shape can be determined from evidence and then encoded via
-`confirmedSuccessShape`.
+**DeleteTweet's success shape is CONFIRMED.** From the 5-item live run,
+identical on all three captured responses and verified by hand afterwards (5
+targets gone, 4 controls untouched, account total 2616 -> 2611):
 
-What can already be classified without a live call: auth failures, 429s, and a
-GraphQL `errors` array — including the "no status found" case, which is
-`already-gone`: benign, but not something we did, so not a success.
+```
+HTTP 200
+{"data":{"delete_tweet":{"tweet_results":{}}}}
+```
+
+`tweet_results` is **empty on purpose** - the tweet no longer exists to be
+returned, so the empty object IS the confirmation. Nothing inside it is
+required, and requiring anything would report a correct deletion as a failure.
+The encoded predicate checks a 2xx, no `errors` key at all, and a non-null
+`data.delete_tweet`.
+
+Now that the shape is known, a DeleteTweet 200 that does **not** match grades as
+`failed` rather than `unverified`: silence used to be ambiguity, and is not any
+more.
+
+**DeleteRetweet's shape is NOT confirmed.** No retweet has been deleted, so no
+response has been seen. It probably looks like `data.unretweet`, and *probably*
+is not good enough for something irreversible - guessing would mean either
+reporting a real failure as a success or a real success as a failure. It stays
+`unverified` until a live response exists, the panel says so on the
+DeleteRetweet row, and `CONFIRMED_SUCCESS_SHAPES` simply has no entry for it so
+there is nothing to match against by accident.
+
+Shapes are keyed **per operation** for exactly this reason: knowledge about one
+must not leak into a claim about another.
 
 ### The 5-item test run
 
@@ -457,6 +475,21 @@ what the run then reports.
 Full runs are locked behind an **attestation**, not a check the tool can make:
 Surtr cannot verify from here that a post is gone, so the user confirms by hand
 and ticks the box. It is labelled as an attestation rather than a verification.
+
+### Raw bodies: position was the wrong criterion
+
+The first version kept the raw response for the first three items of a run.
+That is what was asked for, and it was wrong in a way worth recording: it
+retains exactly the responses you already understand and discards the one that
+matters. If item 300 fails in an unexpected way, the raw body IS the diagnosis,
+and it would not be there.
+
+The rule is now: **retain the raw body for any non-success outcome, wherever it
+occurs**, plus the first three of a run for shape confirmation. Success is the
+only outcome cheap enough to discard, because a confirmed success shape is by
+definition already known. Bodies are capped at 4,000 characters with the
+truncation marked, so a cut body is never mistaken for a whole one and one
+enormous response cannot bloat the log.
 
 ### Rate limits on writes are UNKNOWN
 
@@ -1296,3 +1329,22 @@ NOT RUN against any account. The 5-item test is the next step and full runs are
 locked until it is done and confirmed.
 
 Suite: parser 68, streams 62, execute 68, build 26, filters 23.
+
+### 2026-09-06 — The DeleteTweet success shape, confirmed
+
+The 5-item test ran and was verified by hand: all 5 targets gone, 4 controls
+untouched, account total 2616 -> 2611. 5 dispatched, 0 failed, no 429s at ~1.6s
+spacing.
+
+- **DeleteTweet's success shape is encoded** from the three captured responses.
+  A matching 200 now grades as SUCCEEDED; a non-matching 200 grades as FAILED,
+  because the shape is known and silence is no longer ambiguity.
+- **DeleteRetweet stays unverified.** Not assumed to mirror DeleteTweet. Shapes
+  are keyed per operation so knowledge about one cannot leak into a claim about
+  the other, and the panel names which is unconfirmed.
+- **Raw-body retention fixed.** Keeping the first three of a run retains the
+  responses already understood and drops the one that matters. Now: any
+  non-success outcome at any position, plus the first three, capped at 4,000
+  characters with the truncation marked.
+
+Suite: parser 68, streams 62, execute 94, build 26, filters 23.

@@ -493,6 +493,7 @@
     }
 
     let fatal = null;
+    let dispatched = 0;
     try {
       for (const plan of dispatch) {
         if (abortRequested) { exec.stoppedReason = 'stopped by you'; break; }
@@ -531,17 +532,23 @@
           throw e;
         }
 
-        const verdict = execute.classifyOutcome({ status: res.status, body: res.body });
+        const verdict = execute.classifyOutcome({
+          status: res.status, body: res.body, operationName: plan.op,
+        });
 
-        // Keep the raw body for the first few responses: the success shape for
-        // these operations is not confirmed yet, and it will be determined from
-        // evidence rather than assumed.
-        const keepRaw = exec.done < 3;
+        // Retain the raw body for ANY non-success outcome, wherever it occurs,
+        // plus the first few of a run for confirming shapes. Keeping only the
+        // first three would drop exactly the response worth having when item
+        // 300 fails in a way nobody predicted.
+        const keepRaw = execute.shouldRetainRaw({
+          outcome: verdict.outcome, indexInRun: dispatched,
+        });
+        dispatched += 1;
         await killlog.resolve(index, {
           outcome: verdict.outcome,
           detail: verdict.detail,
           status: res.status,
-          raw: keepRaw ? res.raw : undefined,
+          raw: keepRaw ? execute.truncateRaw(res.raw) : undefined,
         });
 
         if (verdict.outcome === execute.OUTCOME.FAILED && exec.done === 0) {
@@ -588,9 +595,10 @@
         (exec.stoppedReason ? ' - ' + exec.stoppedReason : ''));
       if (exec.counts.unverified > 0) {
         await store.log('warn',
-          'The success shape for these operations is NOT yet confirmed, so ' +
-          exec.counts.unverified + ' item(s) are reported as UNVERIFIED rather than ' +
-          'deleted. Check by hand, then confirm the shape from the kill log.');
+          exec.counts.unverified + ' item(s) are UNVERIFIED rather than deleted: no ' +
+          'confirmed success shape yet for ' + execute.unconfirmedOperations().join(', ') +
+          '. Check by hand, then send the raw response from the kill log so the shape ' +
+          'can be encoded.');
       }
     }
 

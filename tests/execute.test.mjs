@@ -280,6 +280,106 @@ ok(E.configFingerprint({ keepIdList: ['1'] }) !== E.configFingerprint({ keepIdLi
   ok(E.outcomeSummary(E.tally([])) === 'nothing dispatched', 'an empty run says so plainly');
 }
 
+/* ------------------------------------ CONFIRMED SUCCESS SHAPE --- */
+
+{
+  // The exact body observed on all three captured responses of the 5-item run.
+  const LIVE = { data: { delete_tweet: { tweet_results: {} } } };
+
+  const v = E.classifyOutcome({ status: 200, body: LIVE, operationName: 'DeleteTweet' });
+  ok(v.outcome === E.OUTCOME.SUCCEEDED,
+     'the confirmed DeleteTweet body grades as SUCCEEDED, not unverified');
+
+  ok(E.CONFIRMED_SUCCESS_SHAPES.DeleteTweet(LIVE) === true,
+     'the shape matches the live body');
+  ok(E.CONFIRMED_SUCCESS_SHAPES.DeleteTweet(
+       { data: { delete_tweet: { tweet_results: {}, extra: 1 } } }) === true,
+     'extra fields do not break the match');
+
+  // tweet_results is EMPTY on purpose - the tweet no longer exists to be
+  // returned. Requiring anything inside it would report a correct deletion as
+  // a failure.
+  ok(E.CONFIRMED_SUCCESS_SHAPES.DeleteTweet({ data: { delete_tweet: {} } }) === true,
+     'an absent tweet_results still matches - nothing inside it is required');
+
+  ok(E.CONFIRMED_SUCCESS_SHAPES.DeleteTweet({ data: {} }) === false,
+     'a 200 without delete_tweet does NOT match');
+  ok(E.CONFIRMED_SUCCESS_SHAPES.DeleteTweet({ data: { delete_tweet: null } }) === false,
+     'a null delete_tweet does not match');
+  ok(E.CONFIRMED_SUCCESS_SHAPES.DeleteTweet(
+       { data: { delete_tweet: {} }, errors: [] }) === false,
+     'an errors key present at all disqualifies, even when empty');
+
+  const nope = E.classifyOutcome({
+    status: 200, body: { data: {} }, operationName: 'DeleteTweet' });
+  ok(nope.outcome === E.OUTCOME.FAILED,
+     'a 200 that does not match the confirmed shape is a FAILURE, not unverified - ' +
+     'the shape is known now, so silence is not ambiguity');
+
+  // Errors still take precedence over the shape check.
+  const gone = E.classifyOutcome({
+    status: 200, body: { errors: [{ message: 'No status found with that ID.' }] },
+    operationName: 'DeleteTweet' });
+  ok(gone.outcome === E.OUTCOME.ALREADY_GONE,
+     'already-gone still wins over the shape check');
+}
+
+{
+  // DeleteRetweet is NOT confirmed and must not inherit DeleteTweet's shape.
+  const v = E.classifyOutcome({
+    status: 200,
+    body: { data: { unretweet: { source_tweet_results: {} } } },
+    operationName: 'DeleteRetweet',
+  });
+  ok(v.outcome === E.OUTCOME.UNVERIFIED,
+     'DeleteRetweet stays UNVERIFIED - no live response has been seen for it');
+  ok(/DeleteRetweet/.test(v.detail), 'and the detail names the operation');
+
+  const asIfTweet = E.classifyOutcome({
+    status: 200, body: { data: { delete_tweet: {} } }, operationName: 'DeleteRetweet' });
+  ok(asIfTweet.outcome === E.OUTCOME.UNVERIFIED,
+     'knowledge about DeleteTweet does not leak into a claim about DeleteRetweet');
+
+  ok(E.unconfirmedOperations().join(',') === 'DeleteRetweet',
+     'unconfirmedOperations() names exactly what is still unknown: ' +
+     E.unconfirmedOperations().join(','));
+  ok(!E.CONFIRMED_SUCCESS_SHAPES.DeleteRetweet,
+     'there is no DeleteRetweet entry to accidentally match against');
+}
+
+/* ------------------------------------------- RAW BODY RETENTION --- */
+
+{
+  // Position alone was the wrong criterion: it keeps the responses you already
+  // understand and drops the one that matters.
+  ok(E.shouldRetainRaw({ outcome: E.OUTCOME.SUCCEEDED, indexInRun: 0 }) === true,
+     'the first successes are kept, for shape confirmation');
+  ok(E.shouldRetainRaw({ outcome: E.OUTCOME.SUCCEEDED, indexInRun: 2 }) === true,
+     'up to the head count');
+  ok(E.shouldRetainRaw({ outcome: E.OUTCOME.SUCCEEDED, indexInRun: 3 }) === false,
+     'later SUCCESSES are dropped - a confirmed success shape is already known');
+
+  for (const outcome of [E.OUTCOME.FAILED, E.OUTCOME.UNVERIFIED,
+                         E.OUTCOME.ALREADY_GONE, 'attempted']) {
+    ok(E.shouldRetainRaw({ outcome, indexInRun: 299 }) === true,
+       'a ' + outcome + ' body is retained at ANY position - item 300 failing ' +
+       'unexpectedly is exactly when the raw body is the whole diagnosis');
+  }
+}
+
+{
+  const short = 'x'.repeat(100);
+  ok(E.truncateRaw(short) === short, 'a short body is kept whole');
+
+  const huge = 'y'.repeat(E.RAW_MAX + 5000);
+  const cut = E.truncateRaw(huge);
+  ok(cut.length < huge.length, 'an enormous body is capped so the log cannot blow up');
+  ok(cut.length <= E.RAW_MAX + 60, 'the cap is honoured, got ' + cut.length);
+  ok(/truncated 5000 more characters/.test(cut),
+     'and the truncation is marked, so a cut body is never mistaken for the whole one');
+  ok(E.truncateRaw(null) === '', 'a missing body truncates to empty rather than "null"');
+}
+
 /* ------------------------------------------------------- SUMMARY --- */
 
 {
