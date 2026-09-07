@@ -360,6 +360,12 @@
       job.status = store.JOB_ERROR;
       job.error = String(e && e.message ? e.message : e);
       job.finishedAt = new Date().toISOString();
+      // A DEAD RUN MUST NOT LOOK LIKE A LIVE ONE. Leaving these set left the
+      // panel reporting "stream 3 of 3 - replies - running" with a frozen rate
+      // snapshot for 45 minutes after the run had actually stopped, while the
+      // button correctly read "Resume". Two different truths on one screen.
+      job.currentStream = null;
+      job.rateLimited = null;
       await store.set(store.KEY.JOB, job);
       await store.log('error', job.error);
       return { ok: false, error: job.error };

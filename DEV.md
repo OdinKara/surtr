@@ -364,6 +364,98 @@ evidence of a clean sweep. It now returns `complete: false` with
 assessed**. A test asserting the old behaviour was corrected — it had encoded
 the bug.
 
+### Which build is loaded: the panel says so
+
+A 45-minute live run was interpreted against the wrong code. The extension had
+not been reloaded, so a run that appeared to exercise new parser work was
+running the old build, and the result read as a regression in code that never
+executed. "Did you reload?" is not a diagnostic.
+
+The panel's Connection block now shows a **build fingerprint** — a SHA-256 over
+the 13 files that define behaviour, read back through
+`chrome.runtime.getURL()`, i.e. the bytes the browser actually has.
+`node tools/build-id.mjs` prints the identical value for a working tree, so the
+two can be compared directly. If they differ, the browser is running something
+other than that tree.
+
+It is computed rather than written down on purpose. A hand-maintained version
+string answers what somebody last remembered to type, which is worthless
+precisely when the thing in doubt is whether the code on disk is the code in
+memory.
+
+### A NUL byte, and why the fingerprint has a named separator
+
+Building the above surfaced a defect worth recording. The per-file records were
+joined with an inline separator containing a space, and **a stray NUL byte had
+replaced that space** in the shipped file. The source looked identical in every
+editor. Every test passed. The only outward sign was `grep` reporting
+`Binary file lib/build.js matches`.
+
+The consequence was two implementations of the same fingerprint disagreeing —
+the panel said one thing, the tool said another — for a reason invisible on the
+page. Diagnosis took four rounds precisely because the inputs and the digest
+both looked correct in isolation, and they were.
+
+Fixed three ways rather than one, because "be careful" is not a fix:
+
+- the separator is a **named constant of printable characters**, `SEPARATOR`
+- `tools/build-id.mjs` **reads that constant out of `lib/build.js`** instead of
+  restating it, so the two cannot drift apart again
+- `tests/build.test.mjs` **fails on any control byte anywhere in the tree**
+
+### The rate-limit window counter
+
+`101 / 50 requests this window` is not merely wrong, it is impossible — and an
+impossible number in a status line discredits every number beside it. The
+per-window counter was never reset; it accumulated across windows.
+
+The counter now resets at the boundary, detected three ways: X reports a later
+reset than the one being tracked, the tracked reset falls into the past, or
+`remaining` goes **up** (which only happens on a refill). Run-long totals are
+kept separately as `totalRequests`, because "how many requests did this run
+make" is a different question from "how much budget is left in this window".
+
+After waiting out a 429 the cached `remaining` is also **invalidated**: the next
+response's headers are the only authority on whether the window really refilled,
+and treating a pre-sleep snapshot as still true is how a stream waits out its
+window and then behaves as though it were still exhausted.
+
+### One source of truth for "is it running"
+
+The panel showed `stream 3 of 3 - replies - running` while the button read
+`Resume dry-run scan`. Both were rendering honestly from different inputs:
+
+- the status line's `running` was a **literal string**, emitted whenever a
+  `currentStream` existed
+- the button derived from `job.status`, which was correct
+
+And the run had in fact **died**: the `catch` block set `JOB_ERROR` but never
+cleared `currentStream` or `rateLimited`, so a dead run kept presenting as a
+live one, complete with a frozen rate snapshot reading `0 / 50, resets in 0s`.
+
+Now: a single `live` flag derived from `job.status` drives the button, the
+status line, and the rate-limit banner, so they cannot disagree; `runState()`
+is the only thing that describes what the run is doing; the error path clears
+both fields; and a reset timestamp in the past renders as *window elapsed,
+budget refilled* rather than the stuck-looking `resets in 0s`.
+
+### A bound on pagination
+
+The replies stream reached **133 pages** without the cursor ending — which was
+legitimate (roughly 20 items per page against a ~2,600-item account), not a
+loop. `seenCursors` would have caught a genuine repeat.
+
+But nothing bounded the walk except X's own behaviour: cursor exhaustion, a
+repeated cursor, or an empty page. If X ever returns a fresh cursor
+indefinitely, none of those fire. `MAX_PAGES_PER_STREAM = 500` now bounds it,
+with `endReason: 'page-limit'` and a report saying plainly that the result is a
+floor and something is wrong. 500 is ~10,000 entries, far past X's own ~3,200
+ceiling, so reaching it means a defect rather than a large account.
+
+Worth knowing: `pageSize: 100` is sent as `count` but this operation returns
+about 20 conversation modules per page regardless, so page counts are much
+higher than the count parameter suggests.
+
 ### Conversation modules: how replies are actually reached
 
 `UserRepliesTimeline` returns **no flat entries at all**. Every reply arrives
@@ -1025,3 +1117,25 @@ streams — while `crossStreamDuplicates` stays 0. Both were 0 last run only
 because the replies stream produced nothing to collide with.
 
 Suite: parser 68, streams 62, filters 23.
+
+### 2026-09-06 — Window counter, a contradictory UI, and a build fingerprint
+
+Two defects from a three-stream live run, plus a third found while fixing them.
+
+- **The per-window request counter never reset**, producing `101 / 50 requests
+  this window`. Boundary detection added; run-long totals kept separately;
+  cached `remaining` invalidated after a rate-limit wait.
+- **The panel showed two different truths about whether it was running.** The
+  status line said `running` from a literal string while the button correctly
+  said `Resume`. The run had died, and the error path never cleared
+  `currentStream`. One `live` flag now drives all of it.
+- **A page bound.** 133 pages was legitimate depth, not a loop, but nothing
+  bounded the walk at all. `MAX_PAGES_PER_STREAM = 500` with a loud endReason.
+- **A build fingerprint in the panel**, because a 45-minute run had been
+  interpreted against code that was never loaded.
+- **A NUL byte in a string literal**, found while verifying that fingerprint.
+  Invisible in an editor, silently changed a hash, and made two implementations
+  disagree. Now a named constant, read from one place, with a tree-wide
+  control-byte test.
+
+Suite: parser 68, streams 62, build 24, filters 23.

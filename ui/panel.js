@@ -13,6 +13,7 @@
 
 import * as store from '../lib/store.js';
 import * as filters from '../lib/filters.js';
+import { computeBuildId } from '../lib/build.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -156,23 +157,25 @@ function renderJob(job) {
   $('c-excl').textContent = j.excluded || 0;
   $('c-pages').textContent = j.pages || 0;
 
-  const busy = j.status === store.JOB_RUNNING || j.status === store.JOB_STOPPING;
-  $('btn-scan').disabled = busy;
-  $('btn-stop').disabled = !busy;
+  // `live` is THE answer to "is a scan actually in progress", and every other
+  // piece of the UI is derived from it. Nothing else may decide separately.
+  const live = j.status === store.JOB_RUNNING || j.status === store.JOB_STOPPING;
+  $('btn-scan').disabled = live;
+  $('btn-stop').disabled = !live;
   const resumable = (j.streams || []).some(
     (s) => s.status === 'pending' || s.status === 'running');
-  // The button says which of the two states the run is in. "Scanning..." while
-  // actually asleep for fifteen minutes is the exact ambiguity this fixes.
+  // Derived from the SAME `live` flag as the status line, so the two cannot
+  // contradict each other.
   $('btn-scan').textContent =
-    j.rateLimited ? 'Rate limited - waiting'
-    : j.status === store.JOB_RUNNING ? 'Scanning...'
+    live && j.rateLimited ? 'Rate limited - waiting'
+    : live ? 'Scanning...'
     : (resumable && j.enumerated) ? 'Resume dry-run scan'
     : 'Start dry-run scan';
 
   // The rate-limit banner: a live countdown to the window boundary. The wait is
   // interruptible, so Stop still works while it runs.
   const wait = $('rate-wait');
-  if (j.rateLimited) {
+  if (live && j.rateLimited) {
     const rl = j.rateLimited;
     wait.textContent =
       'RATE LIMITED on ' + rl.operationName + ' \u2014 resuming in ' +
@@ -190,16 +193,23 @@ function renderJob(job) {
   const breakdown = active.map((s) => s.label + ' ' + (s.pages || 0)).join(', ');
   const line = $('stream-line');
   if (j.streams && j.streams.length) {
-    const cur = (j.streams || []).find((s) => s.key === j.currentStream);
+    // ONE SOURCE OF TRUTH. This used to be the literal string 'running', which
+    // meant the line said "running" whenever a currentStream existed - including
+    // long after a run had died. The button derived from j.status and said
+    // "Resume" at the same moment. A screen showing two different answers to
+    // "is it working?" is the same defect as a countdown that does not tick.
+    const cur = live ? (j.streams || []).find((s) => s.key === j.currentStream) : null;
     const idx = cur ? j.streams.indexOf(cur) + 1 : null;
-    const rl = j.rateLimited;
-    const state = rl ? 'RATE LIMITED, resuming in ' + countdown(rl.resetAtMs) : 'running';
+    const state = runState(j, cur);
     line.textContent =
       (cur ? 'stream ' + idx + ' of ' + j.streams.length + ' \u00b7 ' + cur.label +
-             ' \u00b7 ' + cur.op + ' \u00b7 ' + state : 'streams idle') +
+             ' \u00b7 ' + cur.op + ' \u00b7 ' + state
+           : 'streams ' + state) +
       (breakdown ? '   |   pages ' + (j.pages || 0) + ' (' + breakdown + ')' : '') +
       (cur && cur.rate && cur.rate.limit
-        ? '   |   ' + cur.rate.requests + ' / ' + cur.rate.limit + ' requests this window'
+        ? '   |   ' + cur.rate.requests + ' / ' + cur.rate.limit + ' this window' +
+          (cur.rate.totalRequests && cur.rate.totalRequests !== cur.rate.requests
+            ? ' (' + cur.rate.totalRequests + ' total)' : '')
         : '');
     line.hidden = false;
   } else {
@@ -340,10 +350,17 @@ function renderRate(job) {
   }
   const limit = r.limit || null;
   bar.style.width = limit ? Math.max(0, Math.min(100, (r.remaining / limit) * 100)) + '%' : '100%';
-  const resetIn = r.reset ? Math.max(0, r.reset - Math.floor(Date.now() / 1000)) : null;
+  const resetIn = r.reset ? r.reset - Math.floor(Date.now() / 1000) : null;
+  // Once the boundary has passed the cached remaining is stale by definition -
+  // saying "0 / 50 remaining, resets in 0s" describes a window that no longer
+  // exists and reads as a stuck stream.
+  const elapsed = resetIn !== null && resetIn <= 0;
   text.textContent =
-    r.operationName + ': ' + r.remaining + (limit ? ' / ' + limit : '') + ' remaining' +
-    (resetIn !== null ? ', resets in ' + resetIn + 's' : '') +
+    r.operationName + ': ' +
+    (elapsed
+      ? 'window elapsed, budget refilled - awaiting the next response'
+      : r.remaining + (limit ? ' / ' + limit : '') + ' remaining' +
+        (resetIn !== null ? ', resets in ' + resetIn + 's' : '')) +
     (r.observed429s ? ' - ' + r.observed429s + ' x 429' : '') +
     (streams.filter((s) => s.rate).length > 1 ? '  (this operation only)' : '');
 }
@@ -631,12 +648,35 @@ for (const id of [
 
 /* --------------------------------------------------------------- countdown --- */
 
-/** mm:ss until an absolute epoch-ms boundary. */
+/** mm:ss until an absolute epoch-ms boundary, or "any moment" once it passes. */
 function countdown(untilMs) {
-  const left = Math.max(0, Math.round((Number(untilMs) - Date.now()) / 1000));
+  const left = Math.round((Number(untilMs) - Date.now()) / 1000);
+  // Past the boundary the honest answer is not "0s" - that reads as stuck. The
+  // window has refilled and the next request will say so.
+  if (!(left > 0)) return 'any moment';
   const m = Math.floor(left / 60);
   const s = left % 60;
   return m + ':' + String(s).padStart(2, '0');
+}
+
+/**
+ * The single description of what the run is doing, used by the status line.
+ *
+ * Derived from job.status, never from the presence of leftover state. A stream
+ * object hanging around from a finished or crashed run must not be able to
+ * make the panel claim work is in progress.
+ */
+function runState(j, cur) {
+  const live = j.status === store.JOB_RUNNING || j.status === store.JOB_STOPPING;
+  if (!live) {
+    return j.status === store.JOB_ERROR ? 'STOPPED (error)'
+      : j.status === store.JOB_PARTIAL ? 'finished (partial)'
+      : j.status === store.JOB_DONE ? 'finished'
+      : 'idle';
+  }
+  if (j.rateLimited) return 'RATE LIMITED, resuming in ' + countdown(j.rateLimited.resetAtMs);
+  if (j.status === store.JOB_STOPPING) return 'stopping';
+  return cur ? cur.status : 'running';
 }
 
 /**
@@ -674,6 +714,28 @@ $('donate').addEventListener('click', (ev) => {
     window.open(DONATE_URL, '_blank', 'noopener,noreferrer');
   }
 });
+
+/* -------------------------------------------------------------------- build --- */
+
+/**
+ * Which code is actually loaded, fingerprinted from the loaded files.
+ *
+ * A live run was once interpreted against the wrong build because the extension
+ * had not been reloaded, and there was no way to tell from the panel. This is
+ * the answer to "which build am I looking at" - compare it with
+ * `node tools/build-id.mjs`.
+ */
+(async () => {
+  try {
+    const b = await computeBuildId();
+    setStatus($('st-build'), b.missing.length === 0,
+      b.id + (b.missing.length ? '  MISSING ' + b.missing.join(', ') : ''));
+    $('st-build').title = 'Fingerprint of the ' + b.files +
+      ' loaded files. Compare with: node tools/build-id.mjs';
+  } catch (e) {
+    setStatus($('st-build'), false, 'unavailable: ' + (e && e.message ? e.message : e));
+  }
+})();
 
 /* ------------------------------------------------------------------- boot --- */
 
