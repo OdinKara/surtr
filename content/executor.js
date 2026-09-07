@@ -512,36 +512,75 @@
         }));
 
         // 2. Only now does anything irreversible happen.
-        let res;
-        try {
-          res = await api.gqlPost({
-            queryId: record.writes[plan.op].queryId,
-            operationName: plan.op,
-            // Per-operation, never a shared builder: DeleteTweet takes
-            // tweet_id, DeleteRetweet takes source_tweet_id, and a single
-            // builder sending one to the other is what caused the 422.
-            variables: execute.variablesFor(plan.op, plan.targetId),
-            bearer: record.bearer,
-            onLog: (level, message) => { store.log(level, message); },
-            shouldAbort,
-            onRateLimit: async (info) => {
-              exec.rateLimited = info ? { ...info } : null;
-              await store.set(store.KEY.EXEC, exec);
-            },
+        //
+        // A 429 IS NEVER A FAILURE. api.gqlPost has already waited out the
+        // window by the time it returns one, so the item is re-dispatched
+        // rather than graded. Two items were once burned here - graded failed
+        // on a 429 while still live on the account - because the wait happened
+        // and the retry did not.
+        let res = null;
+        let verdict = null;
+        let attempt = 0;
+        let threw = null;
+
+        while (attempt < execute.MAX_WRITE_ATTEMPTS) {
+          attempt += 1;
+          try {
+            res = await api.gqlPost({
+              queryId: record.writes[plan.op].queryId,
+              operationName: plan.op,
+              // Per-operation, never a shared builder: DeleteTweet takes
+              // tweet_id, DeleteRetweet takes source_tweet_id, and a single
+              // builder sending one to the other is what caused the 422.
+              variables: execute.variablesFor(plan.op, plan.targetId),
+              bearer: record.bearer,
+              onLog: (level, message) => { store.log(level, message); },
+              shouldAbort,
+              onRateLimit: async (info) => {
+                exec.rateLimited = info ? { ...info } : null;
+                await store.set(store.KEY.EXEC, exec);
+              },
+            });
+          } catch (e) {
+            threw = e;
+            break;
+          }
+
+          verdict = execute.classifyOutcome({
+            status: res.status, body: res.body, operationName: plan.op,
+            targetId: plan.targetId,
           });
-        } catch (e) {
-          await killlog.resolve(index, {
-            outcome: execute.OUTCOME.FAILED,
-            detail: 'request threw: ' + String(e && e.message ? e.message : e),
-          });
-          if (e && e.name === 'AbortedError') { exec.stoppedReason = 'stopped by you'; break; }
-          throw e;
+
+          if (!execute.shouldRetry({
+            outcome: verdict.outcome, retryable: verdict.retryable, attempt,
+          })) break;
+
+          await store.log('warn',
+            'rate limited on ' + plan.op + ' ' + plan.targetId + ' - the window has been ' +
+            'waited out, re-dispatching (attempt ' + (attempt + 1) + ' of ' +
+            execute.MAX_WRITE_ATTEMPTS + ').');
         }
 
-        const verdict = execute.classifyOutcome({
-          status: res.status, body: res.body, operationName: plan.op,
-          targetId: plan.targetId,
-        });
+        if (threw) {
+          const aborted = threw && threw.name === 'AbortedError';
+          await killlog.resolve(index, {
+            // An abort mid-flight is not a failure of the item either.
+            outcome: aborted ? execute.OUTCOME.DEFERRED : execute.OUTCOME.FAILED,
+            detail: aborted
+              ? 'stopped before this item completed - it still exists'
+              : 'request threw: ' + String(threw.message || threw),
+            attempts: attempt,
+          });
+          if (aborted) { exec.stoppedReason = 'stopped by you'; break; }
+          throw threw;
+        }
+
+        if (verdict.outcome === execute.OUTCOME.DEFERRED) {
+          await store.log('warn',
+            plan.op + ' ' + plan.targetId + ' DEFERRED after ' + attempt + ' attempt(s): ' +
+            'still rate limited. The item was NOT deleted and still exists - a re-scan ' +
+            'will pick it up.');
+        }
         if (verdict.mismatch) {
           await store.log('error',
             'ECHOED ID MISMATCH on ' + plan.op + ': sent ' + plan.targetId +
@@ -561,6 +600,7 @@
           outcome: verdict.outcome,
           detail: verdict.detail,
           status: res.status,
+          attempts: attempt,
           raw: keepRaw ? execute.truncateRaw(res.raw) : undefined,
         });
 

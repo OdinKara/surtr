@@ -21,7 +21,8 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 let fails = 0;
-const ok = (c, m) => { console.log((c ? '[OK]  ' : '[X]   ') + m); if (!c) fails++; };
+let passes = 0;
+const ok = (c, m) => { console.log((c ? '[OK]  ' : '[X]   ') + m); if (c) passes++; else fails++; };
 
 /* ------------------------------------------------------- control bytes --- */
 
@@ -103,6 +104,24 @@ const first = files[0];
 const original = fs.readFileSync(path.join(ROOT, first), 'utf8').replace(/\r\n/g, '\n');
 ok(fingerprint({ [first]: original.slice(0, -1) }) !== a,
    'truncating a file by one character changes the fingerprint');
+
+
+/* ------------------------------------------------------- coverage floor --- */
+
+/**
+ * MINIMUM ASSERTION COUNT.
+ *
+ * An edit to the execute suite once deleted ~50 assertions - an entire section -
+ * and it still printed ALL PASS, because fewer passing tests is
+ * indistinguishable from all tests passing. A green signal that means less than
+ * it appears is the exact failure class this project keeps meeting.
+ *
+ * Raise this when adding tests. If it fails after a refactor, tests were lost.
+ */
+const MIN_ASSERTIONS = 26;
+ok(passes + 1 >= MIN_ASSERTIONS,
+   'assertion count ' + (passes + 1) + ' is at or above the floor of ' + MIN_ASSERTIONS +
+   ' - if this fails, tests were deleted rather than fixed');
 
 console.log(fails ? `\nFAILED (${fails})` : `\nALL PASS`);
 process.exit(fails ? 1 : 0);

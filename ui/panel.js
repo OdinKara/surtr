@@ -803,7 +803,7 @@ function renderExec(x) {
   const c = x.counts || {};
   $('x-done').textContent = x.done || 0;
   $('x-ok').textContent = c.succeeded || 0;
-  $('x-unver').textContent = c.unverified || 0;
+  $('x-deferred').textContent = c.deferred || 0;
   $('x-fail').textContent = c.failed || 0;
 
   const st = $('exec-status');
@@ -837,6 +837,21 @@ function renderExec(x) {
     ab.hidden = false;
   } else {
     ab.hidden = true;
+  }
+
+  // DEFERRED items still exist. Saying so matters more than the count: the
+  // failure this replaces was two live posts recorded as "failed", which reads
+  // as an error to investigate rather than work still to do.
+  const df = $('exec-deferred');
+  if (c.deferred) {
+    df.className = 'banner';
+    df.textContent =
+      c.deferred + ' item(s) DEFERRED - rate limited after ' +
+      execute.MAX_WRITE_ATTEMPTS + ' attempts. They were NOT deleted and STILL EXIST. ' +
+      'Re-scan and run again to pick them up. This is not an error.';
+    df.hidden = false;
+  } else {
+    df.hidden = true;
   }
 
   const u = $('exec-unverified');

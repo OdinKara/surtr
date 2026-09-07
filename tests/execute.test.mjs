@@ -26,7 +26,8 @@ const E = await load('lib/execute.js');
 const F = await load('lib/filters.js');
 
 let fails = 0;
-const ok = (c, m) => { console.log((c ? '[OK]  ' : '[X]   ') + m); if (!c) fails++; };
+let passes = 0;
+const ok = (c, m) => { console.log((c ? '[OK]  ' : '[X]   ') + m); if (c) passes++; else fails++; };
 
 const MY_POST = '3000000000000000001';
 const MY_REPLY = '3000000000000000002';
@@ -466,6 +467,207 @@ ok(E.configFingerprint({ keepIdList: ['1'] }) !== E.configFingerprint({ keepIdLi
   ok(two.dispatch.length === 2, 'distinct targets are both dispatched');
 }
 
+/* --------------------------------- A 429 IS NEVER A FAILURE --- */
+
+const fail = (b = { errors: [{ message: 'boom' }] }, status = 500) =>
+  ({ outcome: E.OUTCOME.FAILED, status, body: b, targetId: '1', op: 'DeleteTweet' });
+const win = () => ({ outcome: E.OUTCOME.SUCCEEDED, status: 200, body: { data: {} } });
+
+{
+  // The defect: two items were graded "failed" on a 429 and burned, while still
+  // live on the account. The backoff ran; the retry never did. Same value, two
+  // code paths - the breaker treated 429 as neutral, the classifier did not.
+  const v = E.classifyOutcome({ status: 429, body: null, operationName: 'DeleteTweet' });
+
+  ok(v.outcome !== E.OUTCOME.FAILED,
+     'a 429 is NOT graded as failed - it means try again later');
+  ok(v.outcome === E.OUTCOME.DEFERRED,
+     'it is DEFERRED: not attempted successfully, and the item still exists');
+  ok(v.retryable === true, 'and it is marked retryable so the caller re-dispatches');
+  ok(/still exists/.test(v.detail),
+     'the detail says the item still exists rather than reading as an error');
+
+  ok(E.shouldRetry({ outcome: E.OUTCOME.DEFERRED, retryable: true, attempt: 1 }) === true,
+     'attempt 1 of a rate-limited item RETRIES rather than terminating');
+  ok(E.shouldRetry({ outcome: E.OUTCOME.DEFERRED, retryable: true, attempt: 2 }) === true,
+     'attempt 2 retries');
+  ok(E.shouldRetry({ outcome: E.OUTCOME.DEFERRED, retryable: true, attempt: 3 }) === false,
+     'attempt 3 is the last - retries are bounded, not infinite');
+  ok(E.MAX_WRITE_ATTEMPTS === 3, 'the bound is 3 attempts');
+
+  ok(E.shouldRetry({ outcome: E.OUTCOME.FAILED, retryable: false, attempt: 1 }) === false,
+     'a real failure is NOT retried - only a rate limit is');
+  ok(E.shouldRetry({ outcome: E.OUTCOME.SUCCEEDED, retryable: false, attempt: 1 }) === false,
+     'a success is not retried');
+  ok(E.shouldRetry({ outcome: E.OUTCOME.ALREADY_GONE, retryable: false, attempt: 1 }) === false,
+     'already-gone is not retried');
+}
+
+{
+  const counts = E.tally([
+    { outcome: E.OUTCOME.SUCCEEDED }, { outcome: E.OUTCOME.SUCCEEDED },
+    { outcome: E.OUTCOME.DEFERRED }, { outcome: E.OUTCOME.DEFERRED },
+    { outcome: E.OUTCOME.FAILED },
+  ]);
+  ok(counts.deferred === 2, 'deferred items are counted in their own category');
+  ok(counts.failed === 1, 'and are NOT added to the failed count');
+  ok(counts.succeeded === 2, 'nor to the deleted count');
+
+  const s = E.outcomeSummary(counts);
+  ok(/2 DEFERRED/.test(s), 'the summary names them');
+  ok(/still exist/.test(s), 'and says they still exist');
+  ok(/re-scan/.test(s), 'and that a re-scan will find them');
+  ok(/1 failed/.test(s) && !/3 failed/.test(s),
+     'the failed count does not absorb the deferred ones');
+}
+
+/* ------------------------------------------ CIRCUIT BREAKER --- */
+
+{
+  // 5 consecutive failures aborts.
+  const b = E.createBreaker();
+  for (let i = 1; i <= 4; i += 1) {
+    E.recordOutcome(b, fail());
+    ok(b.tripped === false, 'failure ' + i + ' of 5 does not trip yet');
+  }
+  E.recordOutcome(b, fail());
+  ok(b.tripped === true, 'the FIFTH consecutive failure trips the breaker');
+  ok(/5 consecutive failures/.test(b.reason), 'and says why');
+  ok(b.immediate === false, 'it is a streak abort, not an immediate one');
+  ok(b.failures.length === 5, 'the raw failure bodies are retained for the report');
+
+  const before = b.consecutive;
+  E.recordOutcome(b, win());
+  ok(b.tripped === true && b.consecutive === before,
+     'a tripped breaker is not un-tripped by a later success');
+}
+
+{
+  // 4 failures, a success, 4 more: NOT an abort.
+  const b = E.createBreaker();
+  for (let i = 0; i < 4; i += 1) E.recordOutcome(b, fail());
+  ok(b.consecutive === 4, 'four failures counted');
+  E.recordOutcome(b, win());
+  ok(b.consecutive === 0 && b.tripped === false, 'a SUCCESS resets the counter');
+  for (let i = 0; i < 4; i += 1) E.recordOutcome(b, fail());
+  ok(b.tripped === false,
+     '4 failures, a success, then 4 more does NOT abort');
+
+  const b2 = E.createBreaker();
+  for (let i = 0; i < 4; i += 1) E.recordOutcome(b2, fail());
+  E.recordOutcome(b2, { outcome: E.OUTCOME.ALREADY_GONE, status: 200, body: {} });
+  ok(b2.consecutive === 0, 'ALREADY-GONE resets the counter too');
+}
+
+{
+  // A single validation error aborts immediately.
+  const b = E.createBreaker();
+  E.recordOutcome(b, fail({
+    errors: [{ code: 'GRAPHQL_VALIDATION_FAILED',
+               extensions: { code: 'GRAPHQL_VALIDATION_FAILED' },
+               message: 'must be defined', path: ['variable', 'source_tweet_id'] }],
+  }, 422));
+  ok(b.tripped === true && b.immediate === true,
+     'ONE GRAPHQL_VALIDATION_FAILED aborts immediately');
+  ok(b.consecutive === 1, 'after a single failure, not five');
+  ok(/retrying cannot fix/.test(b.reason),
+     'the reason explains that retrying cannot fix a wrong request shape');
+
+  const b2 = E.createBreaker();
+  E.recordOutcome(b2, fail({ errors: [{ extensions: { code: 'GRAPHQL_VALIDATION_FAILED' } }] },
+                            422));
+  ok(b2.tripped === true, 'the code is found in extensions as well as at the top level');
+
+  for (const status of [400, 404, 409, 422]) {
+    const bn = E.createBreaker();
+    E.recordOutcome(bn, fail({ errors: [{ message: 'nope' }] }, status));
+    ok(bn.tripped === true && bn.immediate === true,
+       'a single HTTP ' + status + ' aborts immediately - refused, not deferred');
+  }
+
+  const b5 = E.createBreaker();
+  E.recordOutcome(b5, fail({ errors: [{ message: 'oops' }] }, 503));
+  ok(b5.tripped === false && b5.consecutive === 1,
+     'a 5xx counts toward the streak rather than aborting on its own');
+}
+
+{
+  // 429 does not count toward the breaker at all.
+  const b = E.createBreaker();
+  for (let i = 0; i < 20; i += 1) {
+    E.recordOutcome(b, { outcome: E.OUTCOME.FAILED, status: 429, body: null,
+                         targetId: '1', op: 'DeleteTweet' });
+  }
+  ok(b.tripped === false && b.consecutive === 0,
+     'TWENTY 429s do not trip the breaker - a rate limit is a "later", not a "no"');
+  ok(b.failures.length === 0, 'and they are not recorded as failures');
+
+  const b2 = E.createBreaker();
+  for (let i = 0; i < 4; i += 1) E.recordOutcome(b2, fail());
+  E.recordOutcome(b2, { outcome: E.OUTCOME.FAILED, status: 429, body: null });
+  ok(b2.consecutive === 4,
+     'a 429 mid-streak neither counts nor RESETS - it cannot launder a failure streak');
+  E.recordOutcome(b2, fail());
+  ok(b2.tripped === true, 'so the next real failure still trips it');
+
+  // And the same holds for the DEFERRED grade a 429 now produces.
+  const b3 = E.createBreaker();
+  for (let i = 0; i < 4; i += 1) E.recordOutcome(b3, fail());
+  E.recordOutcome(b3, {
+    outcome: E.OUTCOME.DEFERRED, status: 429, body: null, targetId: '1', op: 'DeleteTweet' });
+  ok(b3.consecutive === 4 && b3.tripped === false,
+     'a DEFERRED item is neutral for the breaker, exactly as the raw 429 is');
+}
+
+{
+  const b = E.createBreaker();
+  for (let i = 0; i < 4; i += 1) E.recordOutcome(b, fail());
+  E.recordOutcome(b, { outcome: E.OUTCOME.UNVERIFIED, status: 200, body: {} });
+  ok(b.consecutive === 4,
+     'UNVERIFIED does not reset the streak - it is not evidence of success');
+  ok(b.tripped === false, 'and does not count toward it either');
+}
+
+{
+  // An echoed-id mismatch aborts at once.
+  const b = E.createBreaker();
+  E.recordOutcome(b, {
+    outcome: E.OUTCOME.FAILED, status: 200, body: { data: { unretweet: {} } },
+    mismatch: true, targetId: '1', op: 'DeleteRetweet',
+  });
+  ok(b.tripped === true && b.immediate === true,
+     'an ECHOED ID MISMATCH aborts immediately');
+  ok(/ECHOED ID MISMATCH/.test(b.reason), 'and says so');
+}
+
+{
+  // An aborted run never reports as complete.
+  ok(E.runStatusFor({ abortedByBreaker: true }) === 'aborted',
+     'a breaker abort produces status "aborted"');
+  ok(E.runStatusFor({ abortedByBreaker: true, fatal: true, stopped: true }) === 'aborted',
+     'and it wins over every other status');
+  ok(E.runStatusFor({ fatal: true }) === 'error', 'a fatal error is still an error');
+  ok(E.runStatusFor({ stopped: true }) === 'stopped', 'a user stop is still stopped');
+  ok(E.runStatusFor({}) === 'done', 'an untroubled run is done');
+
+  ok(E.runIsComplete('done') === true, 'only "done" counts as complete');
+  for (const s of ['aborted', 'error', 'stopped', 'running', null]) {
+    ok(E.runIsComplete(s) === false, JSON.stringify(s) + ' is NOT complete');
+  }
+
+  const b = E.createBreaker();
+  for (let i = 0; i < 5; i += 1) E.recordOutcome(b, fail());
+  const report = E.breakerReport(b, { succeeded: 3, failed: 5, alreadyGone: 0, unverified: 0 }, 8);
+  ok(/RUN ABORTED BY THE CIRCUIT BREAKER/.test(report), 'the report leads with the abort');
+  ok(/8 dispatched/.test(report) && /3 succeeded/.test(report),
+     'it states how many were dispatched and how they turned out');
+  ok(/were NOT dispatched/.test(report), 'it says the remaining items were not attempted');
+  ok(/not complete and must not be read as one/.test(report),
+     'and it refuses to be read as a completed run');
+  ok(E.breakerReport(E.createBreaker(), {}, 0) === null,
+     'an untripped breaker produces no abort report');
+}
+
 /* ------------------------------------ NO AUTOMATIC DOWNLOADS --- */
 
 // The kill-log auto-download was REMOVED, not gated. There is no decision left
@@ -523,6 +725,24 @@ ok(!('shouldOfferKillLog' in E) && !('recordOffered' in E),
   ok(s.oldest === '2018-01-01T00:00:00.000Z' && s.newest === '2023-09-09T00:00:00.000Z',
      'and reports the oldest and newest dates for the confirmation screen');
 }
+
+
+/* ------------------------------------------------------- coverage floor --- */
+
+/**
+ * MINIMUM ASSERTION COUNT.
+ *
+ * An edit to the execute suite once deleted ~50 assertions - an entire section -
+ * and it still printed ALL PASS, because fewer passing tests is
+ * indistinguishable from all tests passing. A green signal that means less than
+ * it appears is the exact failure class this project keeps meeting.
+ *
+ * Raise this when adding tests. If it fails after a refactor, tests were lost.
+ */
+const MIN_ASSERTIONS = 187;
+ok(passes + 1 >= MIN_ASSERTIONS,
+   'assertion count ' + (passes + 1) + ' is at or above the floor of ' + MIN_ASSERTIONS +
+   ' - if this fails, tests were deleted rather than fixed');
 
 console.log(fails ? `\nFAILED (${fails})` : `\nALL PASS`);
 process.exit(fails ? 1 : 0);

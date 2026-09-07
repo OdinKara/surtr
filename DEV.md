@@ -670,6 +670,61 @@ rather than dropping it silently.
 This makes "one run dispatches the same item twice" structurally impossible
 rather than merely unobserved.
 
+### DEFECT: a 429 was graded as a failure and the item was burned
+
+On a 447-item run, two items came back 429 and were graded **failed**. The
+backoff worked - it caught the window ceiling at item 200 and waited ~10 minutes
+- but those two individual 429s were classified as terminal, the items were
+never re-dispatched, and **both posts are still live on the account** while the
+run reported them as failures.
+
+**A 429 is never a failure.** It means try again later.
+
+The shape of the bug is worth more than the fix: **the same value was handled in
+two code paths and only one of them was right.** The circuit breaker had always
+treated 429 as neutral - explicitly, with a comment explaining why. The
+classifier, twenty lines away, returned `FAILED`. Neither was written carelessly;
+they were written at different times for different purposes, and nothing tied
+them together. Grepping for `429` was what found it, and that is the technique
+to reach for whenever a value carries a meaning: find every site that tests it,
+and check they agree.
+
+**The fix:**
+
+- a 429 grades as `DEFERRED`, never `FAILED`, and carries `retryable: true`
+- the executor **re-dispatches** the item, up to `MAX_WRITE_ATTEMPTS` (3). Each
+  retry happens after `gqlPost` has already waited out the window, so three
+  attempts is three windows rather than three rapid requests
+- if the retries are exhausted the item stays `DEFERRED`, which means **not
+  attempted successfully, still exists, a re-scan will pick it up** - not
+  `failed`, which reads as an error worth investigating rather than work still
+  to do
+- `deferred` is counted separately, never folded into deleted or failed, and the
+  panel says plainly that those items still exist
+- an abort mid-flight also grades `DEFERRED` rather than `FAILED`, for the same
+  reason: the item was not rejected, it was interrupted
+
+`DEFERRED` is neutral for the circuit breaker, exactly as the raw 429 always
+was - so the two paths now agree by construction rather than by coincidence.
+
+**The same audit found a second one.** On the READ path, a 429 did `continue`
+inside the feature-negotiation loop, so every rate limit consumed a negotiation
+round. Enough of them would exhaust the loop and throw *"feature negotiation did
+not converge"* - an error that is both wrong and the kind that sends someone
+looking in entirely the wrong place. Rate-limit waits are now counted
+separately, bounded on their own terms.
+
+### Tests can be deleted silently, so there is a floor now
+
+While fixing the above it turned out that an earlier edit had deleted **~50
+assertions** - the entire circuit-breaker section - by replacing a range wider
+than intended. The suite still printed `ALL PASS`, because **fewer passing tests
+is indistinguishable from all tests passing.**
+
+That is the same class as everything else here: a green signal that means less
+than it appears. Each test file now asserts a `MIN_ASSERTIONS` floor, so losing
+tests fails the suite instead of quietly shrinking it.
+
 ### The consecutive-failure circuit breaker
 
 The first-item guard only catches a run that is broken from the very start. A
@@ -1675,3 +1730,26 @@ test runs landed - which also means the account total is a usable external check
 on a run, not just a completeness denominator.
 
 Suite: parser 68, streams 62, execute 122, build 26, filters 23.
+
+### 2026-09-06 — A 429 is never a failure
+
+Final run: 447 dispatched, 445 deleted, 2 "failed" - both 429s, both items still
+live. The backoff ran; the retry never did.
+
+- **429 now grades as DEFERRED and the item is re-dispatched**, bounded at 3
+  attempts, each after a full window wait. Exhausted retries stay DEFERRED:
+  not attempted successfully, still exists, a re-scan finds it.
+- **Counted and surfaced separately** - never folded into deleted or failed, and
+  the panel says the items still exist and that this is not an error.
+- **An interrupted item is DEFERRED too**, not failed.
+- **Second instance found by the same audit**: a read-path 429 consumed a
+  feature-negotiation round, so enough of them would throw a misleading
+  "negotiation did not converge". Now counted separately and bounded.
+- **Coverage floors added to every test file**: an earlier edit had silently
+  deleted ~50 assertions and the suite still read ALL PASS.
+
+Reconciliation of the log, for the record: 473 entries = 455 succeeded, 15
+unverified (the pre-encoding retweet tests), 3 failed (the DeleteRetweet 422 and
+these two 429s - the latter two would now be DEFERRED and retried).
+
+Suite: parser 69, streams 63, execute 188, build 27, filters 23.

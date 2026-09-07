@@ -259,7 +259,10 @@ wrong tweet, so a retweet whose original id was never captured is **skipped and
 reported**, never falls back to anything.
 
 **Outcomes are counted separately** — deleted, already gone, failed, skipped,
-and *unverified*. A `200` is not proof of deletion, so success requires a
+*deferred* and *unverified*. A rate-limited item is **deferred**, never failed:
+it is retried after the window, and if the retries run out it is reported as
+still existing so a re-scan picks it up. Calling that a failure would read as an
+error to investigate rather than work still to do. A `200` is not proof of deletion, so success requires a
 response shape confirmed against a real live response **for that operation**.
 
 Both write operations now have shapes confirmed against live responses, and

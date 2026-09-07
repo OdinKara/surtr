@@ -27,7 +27,8 @@ const S = await import(
 );
 
 let fails = 0;
-const ok = (c, m) => { console.log((c ? '[OK]  ' : '[X]   ') + m); if (!c) fails++; };
+let passes = 0;
+const ok = (c, m) => { console.log((c ? '[OK]  ' : '[X]   ') + m); if (c) passes++; else fails++; };
 
 const post = (id, kind = 'post') => ({ id, kind, text: 't' + id });
 const TIMELINES = {
@@ -305,6 +306,24 @@ ok(S.overallStatus([{ status: 'done', enumerated: 5 }, { status: 'failed', enume
    'one failed but data was enumerated -> PARTIAL, not error');
 ok(S.overallStatus([{ status: 'failed', enumerated: 0 }, { status: 'failed', enumerated: 0 }]) === 'error',
    'everything failed with nothing enumerated -> error');
+
+
+/* ------------------------------------------------------- coverage floor --- */
+
+/**
+ * MINIMUM ASSERTION COUNT.
+ *
+ * An edit to the execute suite once deleted ~50 assertions - an entire section -
+ * and it still printed ALL PASS, because fewer passing tests is
+ * indistinguishable from all tests passing. A green signal that means less than
+ * it appears is the exact failure class this project keeps meeting.
+ *
+ * Raise this when adding tests. If it fails after a refactor, tests were lost.
+ */
+const MIN_ASSERTIONS = 62;
+ok(passes + 1 >= MIN_ASSERTIONS,
+   'assertion count ' + (passes + 1) + ' is at or above the floor of ' + MIN_ASSERTIONS +
+   ' - if this fails, tests were deleted rather than fixed');
 
 console.log(fails ? `\nFAILED (${fails})` : `\nALL PASS`);
 process.exit(fails ? 1 : 0);
