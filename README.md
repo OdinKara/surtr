@@ -7,7 +7,7 @@ server, no account, and nothing is uploaded.
 
 ![Surtr scanning a timeline](docs/demo.gif)
 
-By [GrimnirWorks](https://grimnirworks.com) · GrimnirWorks · niamain@gmail.com
+By [GrimnirWorks](https://grimnirworks.com) · niamain@gmail.com
 Licensed [AGPL-3.0](LICENSE).
 
 ---

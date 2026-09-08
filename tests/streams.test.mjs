@@ -54,7 +54,7 @@ ok(plan[0].status === 'pending', 'posts still runs when retweets are excluded');
 
 // The skip rule is symmetric, and deliberately so: walking a stream whose every
 // entry is about to be filtered out is pure waste of rate budget, whichever
-// stream it is. the maintainer approved this for reposts; it falls out of one rule
+// stream it is. The maintainer approved this for reposts; it falls out of one rule
 // rather than a special case, and a skipped stream is equally visible either
 // way (banner + streams block).
 plan = S.planStreams({ config: { includeKinds: ['retweet'] }, timelines: TIMELINES });
