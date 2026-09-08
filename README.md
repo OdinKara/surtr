@@ -5,10 +5,59 @@ browser.** Surtr reads your account, shows you exactly what matches your
 filters, and deletes only what you have looked at and approved. There is no
 server, no account, and nothing is uploaded.
 
+![Surtr scanning a timeline](docs/demo.gif)
+
 By [GrimnirWorks](https://grimnirworks.com) · GrimnirWorks · niamain@gmail.com
 Licensed [AGPL-3.0](LICENSE).
 
 ---
+
+## Install
+
+Surtr is not in the Chrome or Edge store. It loads unpacked, which is also what
+lets you read every line before you run it.
+
+1. Download `surtr-v1.0.0.zip` from
+   [Releases](https://github.com/OdinKara/surtr/releases).
+2. **Unzip it somewhere permanent** — see the warning below.
+3. Open `chrome://extensions` (or `edge://extensions`).
+4. Turn on **Developer mode**.
+5. Click **Load unpacked** and select the unzipped folder — the one with
+   `manifest.json` directly inside it.
+6. Open <https://x.com/home> and make sure you are signed in.
+7. Click the Surtr toolbar icon to open the side panel.
+
+> **Do not move the folder afterwards.** An unpacked extension's ID is derived
+> from its absolute path. Move it, rename a parent folder, or unzip it again
+> somewhere else, and the browser treats it as a different extension: the old
+> one breaks and the new one starts with empty storage. Unzip it where it is
+> going to live — not in Downloads, not on the Desktop — and use **Reload** on
+> the extension card when you update, rather than removing and re-adding it.
+
+Prefer to audit before you install? Clone the repository and point **Load
+unpacked** at the clone instead. It is the same code — there is no build step,
+so the zip and the repo are the same files.
+
+## Why not a hosted tool
+
+Every other bulk-delete tool asks you to sign in on their website. Think about
+what that requires: **to know which posts to delete, the service has to read
+your timeline** — the text of every post, its date, its engagement, the lot. It
+cannot do the job without that.
+
+So the content passes through their servers, and once it is there it is in their
+request logs, their database, their backups, and whatever analytics they bolted
+on. Some of it is retained by design; the rest is retained by accident, which is
+the same thing from your side. And that copy outlives the deletion: **the
+deletion is real, the erasure is not.** You have removed the posts from X and
+handed a complete copy to somebody else, along with a token that can act as you.
+
+Surtr has no server. There is nothing to sign in to, nothing to trust with a
+token, and no second copy — your posts are read by code running in your own
+browser, in the x.com tab you are already signed in to, and they never leave it.
+That is not a promise about a privacy policy. It is a property of the
+architecture, and the [audit section](#audit-it-in-five-minutes) below shows you
+how to confirm it in about five minutes.
 
 ## What it does
 
@@ -480,16 +529,6 @@ The count is conservative on purpose, and conservative means biased, not merely
 cautious. The tool would rather under-claim than tell you something is gone
 when it cannot prove it.
 ---
-
-## Install (unpacked)
-
-1. Clone or download this repository.
-2. Open `edge://extensions` (or `chrome://extensions`).
-3. Turn on **Developer mode**.
-4. Click **Load unpacked** and select the repository folder — the one with
-   `manifest.json` in it.
-5. Open <https://x.com/home> and make sure you are logged in.
-6. Click the Surtr toolbar icon to open the side panel.
 
 ## Scanning
 
